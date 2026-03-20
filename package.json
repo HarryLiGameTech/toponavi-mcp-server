@@ -7,13 +7,22 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "jest",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
+    "@jest/globals": "^30.3.0",
+    "@jest/types": "^30.3.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@types/node": "^25.5.0",
+    "axios": "^1.7.9",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.6",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },

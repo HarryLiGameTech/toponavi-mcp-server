@@ -19,6 +19,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
+import axios from "axios";
 
 // ---------------------------------------------------------------------------
 // Server instantiation
@@ -50,30 +51,65 @@ const server = new McpServer({
 //   );
 // ---------------------------------------------------------------------------
 
-// TODO: specify this tool
 server.registerTool(
-  "tool-placeholder-1",
+  "test-building-query",
   {
-    title: "Placeholder Tool 1",
-    description: "TODO: specify this tool",
-    inputSchema: z.object({}),
+    title: "Test Building Query",
+    description: "A tool to query test building information",
+    inputSchema: z.object({
+      buildingName: z.string().describe("The name of the building to query"),
+    }),
   },
-  async (_args) => ({
-    content: [{ type: "text", text: "TODO: implement handler" }],
-  }),
+  async ({ buildingName }) => {
+    // Make HTTP request to your Spring Boot backend
+    const response = await axios.get("http://192.168.50.65:8080/api/v1/test-building-query", {
+      params: { name: buildingName },
+    });
+
+    const { name, address, height, description } = response.data;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${name} is a ${height}-meter building located at ${address}. ${description}`,
+        },
+      ],
+    };
+  }
 );
 
-// TODO: specify this tool
+// Basic navigation query tool
+// Require exact node-name match
 server.registerTool(
-  "tool-placeholder-2",
+  "indoor-navigation-path-query",
   {
-    title: "Placeholder Tool 2",
-    description: "TODO: specify this tool",
-    inputSchema: z.object({}),
+    title: "Indoor Navigation Path Query (Shanghai World Financial Center only)",
+    description: "A tool to query indoor navigation paths between two locations (nodes) within a Shanghai World Financial Center. The input nodes must be in the format of '{floor}::{node}', e.g. 'B1::NodeA' or 'Floor4::NodeB'. The tool will return the navigation route, detailed steps, and estimated time.",
+    inputSchema: z.object({
+      startNode: z.string().describe("The starting location/node for the navigation query. It must be in '{floor}::{node}' format, e.g. 'B1::NodeA'"),
+      endNode: z.string().describe("The ending location/node for the navigation query. It must be in '{floor}::{node}' format, e.g. 'Floor4::NodeB'"),
+    }),
   },
-  async (_args) => ({
-    content: [{ type: "text", text: "TODO: implement handler" }],
-  }),
+  async ({ startNode, endNode }) => {
+    // Make HTTP request to your Spring Boot backend
+    const response = await axios.get("http://192.168.50.65:8080/api/v1/quick-demo-navigation", {
+      params: { startNode: startNode, endNode: endNode },
+    });
+
+    const { steps, path } = response.data;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Navigation route:\n${path}\n\nDetailed steps:\n${steps.map((step: any, index: number) =>
+            `${index + 1}. ${step.description || `${step.type}: ${step.from || step.fromGraph} → ${step.to || step.toGraph}`}${step.costSeconds ? ` (${Math.round(step.costSeconds / 60)}m ${Math.round(step.costSeconds % 60)}s)` : ''}${step.namedWaypoints && step.namedWaypoints.length > 0 ? `\n   Waypoints: ${step.namedWaypoints.join(' → ')}` : ''}`
+          ).join('\n\n')}`
+        },
+      ],
+    };
+  }
 );
 
 // TODO: specify this tool

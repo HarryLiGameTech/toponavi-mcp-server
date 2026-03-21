@@ -79,6 +79,64 @@ server.registerTool(
   }
 );
 
+// Helper function to find the best matching submap name
+function findBestMatch(fuzzyName: string, availableNames: string[]): string | null {
+  if (!availableNames || availableNames.length === 0) return null;
+
+  const lowerFuzzy = fuzzyName.toLowerCase();
+  let bestMatch: string | null = null;
+  let highestScore = 0;
+
+  for (const name of availableNames) {
+    const lowerName = name.toLowerCase();
+    let score = 0;
+
+    // Check for exact match (case-insensitive)
+    if (lowerName === lowerFuzzy) {
+      return name; // Perfect match
+    }
+
+    // Check if fuzzy name is contained in available name
+    if (lowerName.includes(lowerFuzzy)) {
+      score += 0.8;
+    }
+
+    // Check if available name is contained in fuzzy name
+    if (lowerFuzzy.includes(lowerName)) {
+      score += 0.7;
+    }
+
+    // Check for partial overlap
+    const overlap = calculateOverlap(lowerFuzzy, lowerName);
+    score += overlap * 0.6;
+
+    // Bonus for similar length ratio
+    const lengthRatio = Math.min(lowerFuzzy.length, lowerName.length) / Math.max(lowerFuzzy.length, lowerName.length);
+    score += lengthRatio * 0.3;
+
+    if (score > highestScore && score > 0.5) { // Minimum threshold
+      highestScore = score;
+      bestMatch = name;
+    }
+  }
+
+  return bestMatch;
+}
+
+// Helper function to calculate character overlap between two strings
+function calculateOverlap(str1: string, str2: string): number {
+  let overlap = 0;
+  const maxLength = Math.min(str1.length, str2.length);
+
+  for (let i = 0; i < maxLength; i++) {
+    if (str1[i] === str2[i]) {
+      overlap++;
+    }
+  }
+
+  return overlap / Math.max(str1.length, str2.length);
+}
+
 // Basic navigation query tool
 // Require exact node-name match
 server.registerTool(
@@ -112,18 +170,37 @@ server.registerTool(
   }
 );
 
-// TODO: specify this tool
-server.registerTool(
-  "tool-placeholder-3",
-  {
-    title: "Placeholder Tool 3",
-    description: "TODO: specify this tool",
-    inputSchema: z.object({}),
-  },
-  async (_args) => ({
-    content: [{ type: "text", text: "TODO: implement handler" }],
-  }),
-);
+
+// server.registerTool(
+//   "indoor-navigation-submap-name-query",
+//   {
+//     title: "Indoor Navigation Submap Name Query",
+//     description: "A tool to query indoor navigation submaps by name. The input is an user-prompted fuzzy submap name (not exactly equal to the defined submap name inside the database), and the tool will return the corresponding exact submap name.",
+//     inputSchema: z.object({
+//       fuzzySubmapName: z.string().describe("The fuzzy submap name that the user prompted"),
+//     }),
+//   },
+//   async ({ fuzzySubmapName }) => {
+//     // Make HTTP request to your Spring Boot backend
+//     const response = await axios.get("http://192.168.50.65:8080/api/v1/quick-demo-available-nodes", {
+//       params: { fuzzySubmapName: fuzzySubmapName },
+//     });
+
+//     const { availableFiles } = response.data;
+
+//     // Find the best matching submap name from available ones
+//     const bestMatch = findBestMatch(fuzzySubmapName, availableFiles);
+
+//     return {
+//       content: [
+//         {
+//           type: "text",
+//           text: `Based on your fuzzy submap name "${fuzzySubmapName}", the exact submap name is:\n\n${bestMatch || 'No matching submap found'}`
+//         },
+//       ],
+//     };
+//   }
+// );
 
 // ---------------------------------------------------------------------------
 // RESOURCES

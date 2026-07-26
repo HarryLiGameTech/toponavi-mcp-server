@@ -1,6 +1,9 @@
 import type { AxiosInstance } from "axios";
 import { describe, expect, it, jest } from "@jest/globals";
-import { createPlanRouteHandler } from "./navigation.js";
+import {
+  createPlanRouteHandler,
+  navigationOutputSchema,
+} from "./navigation.js";
 
 function mockClientWith(result: unknown) {
   const post = jest.fn(async (_url: string, _data?: unknown, _config?: unknown) => result);
@@ -68,6 +71,28 @@ const routeResponse = {
 };
 
 describe("indoor-navigation-path-query handler", () => {
+  it("validates both successful and failed navigation outputs", () => {
+    expect(navigationOutputSchema.safeParse(routeResponse).success).toBe(true);
+    expect(navigationOutputSchema.safeParse({
+      status: "error",
+      code: "DESTINATION_HAS_BANNED_TAG",
+      message: "Destination has banned tags",
+      details: { conflictingTags: ["staffed"] },
+      recoveryHint: "Ask before relaxing the ban.",
+      httpStatus: 422,
+    }).success).toBe(true);
+
+    expect(navigationOutputSchema.safeParse({
+      status: "success",
+      code: "DESTINATION_HAS_BANNED_TAG",
+      message: "Destination has banned tags",
+    }).success).toBe(false);
+    expect(navigationOutputSchema.safeParse({
+      status: "error",
+      path: "route without an error code",
+    }).success).toBe(false);
+  });
+
   it("posts traversal preferences and returns structured waypoints", async () => {
     const { client, post } = mockClientWith({ data: routeResponse });
     const handler = createPlanRouteHandler(client);

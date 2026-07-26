@@ -23,7 +23,7 @@ import axios from "axios";
 import {
   createPlanRouteHandler,
   navigationInputSchema,
-  routeResponseOutputSchema,
+  navigationOutputSchema,
 } from "./navigation.js";
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ server.registerTool(
     title: "Indoor Navigation Path Query (Shanghai World Financial Center only)",
     description: "Plan an indoor route using exact '{submap}::{node}' identifiers. Supports primary route preference and hard banTags. Returns structured waypoints, tags, required actions, applied preferences, and recoverable business errors. Resolve fuzzy place names before calling this tool.",
     inputSchema: navigationInputSchema,
-    outputSchema: routeResponseOutputSchema,
+    outputSchema: navigationOutputSchema,
   },
   createPlanRouteHandler(),
 );

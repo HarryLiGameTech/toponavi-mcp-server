@@ -134,6 +134,44 @@ export const routeResponseOutputSchema = z.object({
 
 export type RouteResponse = z.infer<typeof routeResponseOutputSchema>;
 
+export const routeErrorOutputSchema = z.object({
+  status: z.literal("error"),
+  code: z.string(),
+  message: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+  recoveryHint: z.string().optional(),
+  httpStatus: z.number().int().optional(),
+}).passthrough();
+
+export type RouteErrorResponse = z.infer<typeof routeErrorOutputSchema>;
+export type NavigationOutput = RouteResponse | RouteErrorResponse;
+
+// MCP tool output schemas must be rooted at an object. Keep the wire shape flat
+// while enforcing the success/error branches during server-side validation.
+export const navigationOutputSchema = routeResponseOutputSchema.partial().extend({
+  status: z.enum(["success", "error"]),
+  code: routeErrorOutputSchema.shape.code.optional(),
+  message: routeErrorOutputSchema.shape.message.optional(),
+  details: routeErrorOutputSchema.shape.details,
+  recoveryHint: routeErrorOutputSchema.shape.recoveryHint,
+  httpStatus: routeErrorOutputSchema.shape.httpStatus,
+}).superRefine((value, context) => {
+  const branchSchema = value.status === "success"
+    ? routeResponseOutputSchema
+    : routeErrorOutputSchema;
+  const result = branchSchema.safeParse(value);
+
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      context.addIssue({
+        code: "custom",
+        path: issue.path,
+        message: issue.message,
+      });
+    }
+  }
+});
+
 type NavigationToolResult = {
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: Record<string, unknown>;

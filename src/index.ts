@@ -20,6 +20,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import axios from "axios";
+import {
+  createPlanRouteHandler,
+  navigationInputSchema,
+  routeResponseOutputSchema,
+} from "./navigation.js";
 
 // ---------------------------------------------------------------------------
 // Server instantiation
@@ -27,7 +32,14 @@ import axios from "axios";
 
 const server = new McpServer({
   name: "toponavi-mcp-server",
-  version: "0.1.0",
+  version: "0.2.0",
+}, {
+  instructions: [
+    "Use structured route waypoints rather than legacy namedWaypoints.",
+    "Never present nodeId as a user-facing place name; prefer shopName, facilityName, or description.",
+    "Always communicate requiredActions and requiredActionEvents.",
+    "Treat route-tool business errors as recoverable constraints and do not silently relax user banTags.",
+  ].join(" "),
 });
 
 // ---------------------------------------------------------------------------
@@ -79,6 +91,12 @@ server.registerTool(
   }
 );
 
+// TODO(agentic-navigation): Restore fuzzy submap resolution as a dedicated tool.
+// It should query the current quick-demo-available-submaps endpoint, accept a
+// user-provided incomplete submap name, and return ranked exact submap names.
+// Keep node-name resolution separate: first resolve the submap, then search
+// nodes within that exact submap. Replace the stale commented endpoint below
+// and return multiple candidates when confidence is ambiguous.
 // Helper function to find the best matching submap name
 function findBestMatch(fuzzyName: string, availableNames: string[]): string | null {
   if (!availableNames || availableNames.length === 0) return null;
@@ -137,37 +155,15 @@ function calculateOverlap(str1: string, str2: string): number {
   return overlap / Math.max(str1.length, str2.length);
 }
 
-// Basic navigation query tool
-// Require exact node-name match
 server.registerTool(
   "indoor-navigation-path-query",
   {
     title: "Indoor Navigation Path Query (Shanghai World Financial Center only)",
-    description: "A tool to query indoor navigation paths between two locations (nodes) within a Shanghai World Financial Center. The input nodes must be in the format of '{floor}::{node}', e.g. 'B1::NodeA' or 'Floor4::NodeB'. The tool will return the navigation route, detailed steps, and estimated time.",
-    inputSchema: z.object({
-      startNode: z.string().describe("The starting location/node for the navigation query. It must be in '{floor}::{node}' format, e.g. 'B1::NodeA'"),
-      endNode: z.string().describe("The ending location/node for the navigation query. It must be in '{floor}::{node}' format, e.g. 'Floor4::NodeB'"),
-    }),
+    description: "Plan an indoor route using exact '{submap}::{node}' identifiers. Supports primary route preference and hard banTags. Returns structured waypoints, tags, required actions, applied preferences, and recoverable business errors. Resolve fuzzy place names before calling this tool.",
+    inputSchema: navigationInputSchema,
+    outputSchema: routeResponseOutputSchema,
   },
-  async ({ startNode, endNode }) => {
-    // Make HTTP request to your Spring Boot backend
-    const response = await axios.get("http://192.168.50.65:8080/api/v1/quick-demo-navigation", {
-      params: { startNode: startNode, endNode: endNode },
-    });
-
-    const { steps, path } = response.data;
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Navigation route:\n${path}\n\nDetailed steps:\n${steps.map((step: any, index: number) =>
-            `${index + 1}. ${step.description || `${step.type}: ${step.from || step.fromGraph} → ${step.to || step.toGraph}`}${step.costSeconds ? ` (${Math.round(step.costSeconds / 60)}m ${Math.round(step.costSeconds % 60)}s)` : ''}${step.namedWaypoints && step.namedWaypoints.length > 0 ? `\n   Waypoints: ${step.namedWaypoints.join(' → ')}` : ''}`
-          ).join('\n\n')}`
-        },
-      ],
-    };
-  }
+  createPlanRouteHandler(),
 );
 
 

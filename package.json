@@ -1,6 +1,6 @@
 {
   "name": "toponavi-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A baseline MCP server for toponavi, built with the Model Context Protocol TypeScript SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -8,8 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "jest",
-    "test:watch": "jest --watch"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch"
   },
   "dependencies": {
     "@jest/globals": "^30.3.0",

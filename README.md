@@ -67,6 +67,32 @@ npm start
 The server communicates over **stdio** (standard in/out), which is the standard
 transport for locally-embedded MCP servers (e.g. Claude Desktop integration).
 
+### Backend configuration
+
+The navigation tool calls the TopoNavi Web API. Configure its base URL and
+request timeout with environment variables:
+
+```bash
+export TOPONAVI_API_BASE_URL="http://127.0.0.1:8080"
+export TOPONAVI_API_TIMEOUT_MS="60000"
+```
+
+`TOPONAVI_API_BASE_URL` defaults to the existing development backend address.
+The 60-second default timeout allows a cold SWFC map compilation to finish.
+
+### Navigation tool
+
+`indoor-navigation-path-query` accepts exact `{submap}::{node}` identifiers,
+optional compile-time `userParams`, and these implemented traversal fields:
+
+- `routePlanningPreference`
+- `banTags`
+
+The result includes MCP `structuredContent` with structured `waypoints`, route
+tags, required actions, applied preferences, and machine-readable business
+errors. `minimizeTag`, `maximizeTag`, and `riskPreference` are intentionally not
+advertised until their backend behavior is implemented.
+
 ---
 
 ## Connecting to Claude Desktop

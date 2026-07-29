@@ -344,4 +344,52 @@ describe("indoor-navigation-path-query handler", () => {
       code: "TOPONAVI_BACKEND_UNAVAILABLE",
     });
   });
+
+  it("normalizes legacy no-route HTTP 500 responses as parameter business failures", async () => {
+    const post = jest.fn(async () => {
+      throw {
+        isAxiosError: true,
+        message: "Request failed with status code 500",
+        response: {
+          status: 500,
+          data: {
+            exceptionType: "java.lang.RuntimeException",
+            error: "No intra-map route found within high-rise building LowerLobby from gate_2 to L1_hall",
+          },
+        },
+      };
+    });
+    const handler = createPlanRouteHandler(
+      { post } as unknown as Pick<AxiosInstance, "post">,
+    );
+
+    const result = await handler({
+      buildingName: "swfc",
+      startNode: "LowerLobby::gate_2",
+      endNode: "LowerLobby::L1_hall",
+      userParams: { haveStaffCard: false },
+      traversalPreference: {
+        routePlanningPreference: "MinimizeTime",
+        banTags: [],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "error",
+      code: "NO_ROUTE_FOR_USER_PARAMS",
+      message: "No route is available with the supplied access and capability parameters.",
+      httpStatus: 500,
+      details: {
+        userParams: {
+          haveStaffCard: false,
+          haveManagementCard: false,
+          haveRoomKey: false,
+          id: 0,
+          aggregatedWeight: 0,
+        },
+      },
+    });
+    expect((result.structuredContent as any).recoveryHint).not.toContain("backend availability");
+  });
 });

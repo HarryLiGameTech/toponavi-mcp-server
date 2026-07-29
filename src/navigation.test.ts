@@ -2,6 +2,8 @@ import type { AxiosInstance } from "axios";
 import { describe, expect, it, jest } from "@jest/globals";
 import {
   createPlanRouteHandler,
+  deriveNodeIdFallback,
+  deriveRouteOverview,
   navigationOutputSchema,
 } from "./navigation.js";
 
@@ -16,6 +18,13 @@ function mockClientWith(result: unknown) {
 const routeResponse = {
   status: "success",
   path: "legacy node-id path",
+  routeOverview: {
+    isComplex: false,
+    transportCount: 0,
+    transferCount: 0,
+    transferGraphs: [],
+    initialGuidanceThroughStep: null,
+  },
   steps: [{
     step: 1,
     type: "Walk",
@@ -71,6 +80,48 @@ const routeResponse = {
 };
 
 describe("indoor-navigation-path-query handler", () => {
+  it("derives cautious user-facing hints from semantic node IDs", () => {
+    expect(deriveNodeIdFallback("southwest_corner")).toEqual({
+      label: "the southwest corner",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("wacker_junction")).toEqual({
+      label: "Wacker junction",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("between_room_312_313")).toEqual({
+      label: "between rooms 312 and 313",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("corner_0715")).toEqual({
+      label: "a corner",
+      kind: "generic_geometry",
+    });
+    expect(deriveNodeIdFallback("SH_hall")).toEqual({
+      label: "a hall",
+      kind: "generic_geometry",
+    });
+    expect(deriveNodeIdFallback("n_3e44fa1b")).toBeUndefined();
+  });
+
+  it("derives macro-route transfers and the first-transfer boundary", () => {
+    expect(deriveRouteOverview([
+      { step: 1, type: "Walk" },
+      { step: 2, type: "Transport", toGraph: "Floor91" },
+      { step: 3, type: "Walk" },
+      { step: 4, type: "Transport", toGraph: "Floor96" },
+      { step: 5, type: "Walk" },
+      { step: 6, type: "Transport", toGraph: "SkyWalk100" },
+      { step: 7, type: "Walk" },
+    ])).toEqual({
+      isComplex: true,
+      transportCount: 3,
+      transferCount: 2,
+      transferGraphs: ["Floor91", "Floor96"],
+      initialGuidanceThroughStep: 2,
+    });
+  });
+
   it("validates both successful and failed navigation outputs", () => {
     expect(navigationOutputSchema.safeParse(routeResponse).success).toBe(true);
     expect(navigationOutputSchema.safeParse({
@@ -138,6 +189,13 @@ describe("indoor-navigation-path-query handler", () => {
     expect(structured.steps[0].from).toBe("Retail service elevator hall");
     expect(structured.steps[0].to).toBe("Loading bay");
     expect(structured.steps[0].requiredActions).toEqual(["cross_door"]);
+    expect(structured.routeOverview).toEqual({
+      isComplex: false,
+      transportCount: 0,
+      transferCount: 0,
+      transferGraphs: [],
+      initialGuidanceThroughStep: null,
+    });
     expect(result.content[0].text).not.toContain("internal_start");
     expect(result.content[0].text).toContain("cross_door");
   });

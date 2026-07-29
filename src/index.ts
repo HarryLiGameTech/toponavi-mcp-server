@@ -159,7 +159,7 @@ server.registerTool(
   "indoor-navigation-path-query",
   {
     title: "Indoor Navigation Path Query (Shanghai World Financial Center only)",
-    description: "Plan an indoor route using exact '{submap}::{node}' identifiers. Supports primary route preference and hard banTags. Returns structured waypoints, tags, required actions, applied preferences, and recoverable business errors. Resolve fuzzy place names before calling this tool.",
+    description: "Plan an indoor route using exact '{submap}::{node}' identifiers. Returns a structured routeOverview for macro-route and first-transfer guidance, plus waypoints with cautious fallbackLabel hints when metadata is missing. Never speak raw node IDs: use semantic hints naturally, keep generic geometry generic, and omit opaque nodes. Supports route preference, hard banTags, required actions, and recoverable business errors. Resolve fuzzy place names before calling this tool.",
     inputSchema: navigationInputSchema,
     outputSchema: navigationOutputSchema,
   },

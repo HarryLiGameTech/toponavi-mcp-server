@@ -49,6 +49,8 @@ const waypointSchema = z.object({
   beaconId: z.string().nullable().optional(),
   isTrivial: z.boolean(),
   isIntermediate: z.boolean(),
+  fallbackLabel: z.string().optional(),
+  fallbackLabelKind: z.enum(["semantic_node_id", "generic_geometry"]).optional(),
 }).passthrough();
 
 const requiredActionEventSchema = z.object({
@@ -104,6 +106,14 @@ const deprecationSchema = z.object({
   message: z.string(),
 }).passthrough();
 
+export const routeOverviewSchema = z.object({
+  isComplex: z.boolean(),
+  transportCount: z.number().int().nonnegative(),
+  transferCount: z.number().int().nonnegative(),
+  transferGraphs: z.array(z.string()),
+  initialGuidanceThroughStep: z.number().int().positive().nullable(),
+});
+
 const rawRouteResponseSchema = z.object({
   status: z.literal("success"),
   path: z.string(),
@@ -122,6 +132,7 @@ export const routeResponseOutputSchema = z.object({
   status: z.literal("success"),
   path: z.string(),
   steps: z.array(routeStepOutputSchema),
+  routeOverview: routeOverviewSchema,
   appliedTraversalPreference: z.object({
     routePlanningPreference: routePlanningPreferenceSchema,
     banTags: z.array(z.string()),
@@ -209,11 +220,124 @@ function resolveUserParams(input: NavigationInput): Record<string, boolean | num
   return { ...SWFC_DEFAULT_USER_PARAMS, ...input.userParams };
 }
 
-function waypointLabel(waypoint: z.infer<typeof waypointSchema>): string {
+export type NodeIdFallback = {
+  label: string;
+  kind: "semantic_node_id" | "generic_geometry";
+};
+
+const GEOMETRY_WORDS: Record<string, { noun: string; article: "a" | "an" }> = {
+  corner: { noun: "corner", article: "a" },
+  junction: { noun: "junction", article: "a" },
+  intersection: { noun: "intersection", article: "an" },
+  intersect: { noun: "intersection", article: "an" },
+  corridor: { noun: "corridor", article: "a" },
+  corr: { noun: "corridor", article: "a" },
+  hallway: { noun: "hallway", article: "a" },
+  hall: { noun: "hall", article: "a" },
+  lobby: { noun: "lobby", article: "a" },
+  entrance: { noun: "entrance", article: "an" },
+  exit: { noun: "exit", article: "an" },
+  door: { noun: "door", article: "a" },
+  doorway: { noun: "doorway", article: "a" },
+  stairs: { noun: "staircase", article: "a" },
+  staircase: { noun: "staircase", article: "a" },
+  landing: { noun: "landing", article: "a" },
+};
+
+const NON_DESCRIPTIVE_TOKENS = new Set([
+  "a", "b", "c", "d", "in", "out", "inside", "outside", "end", "interm",
+  "intermediate", "node",
+]);
+
+function isOpaqueToken(token: string): boolean {
+  return /^\d+$/u.test(token)
+    || /^[a-f\d]{6,}$/iu.test(token)
+    || /^[a-z]{1,4}\d+$/iu.test(token)
+    || /^[A-Z]{2,5}$/u.test(token)
+    || NON_DESCRIPTIVE_TOKENS.has(token.toLowerCase());
+}
+
+function titleCaseWords(tokens: string[]): string {
+  return tokens
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
+    .join(" ");
+}
+
+export function deriveNodeIdFallback(nodeId: string): NodeIdFallback | undefined {
+  const localId = nodeId.split("::").at(-1)?.trim() ?? "";
+  if (!localId || /^(?:n|node)[_-][a-f\d]{6,}$/iu.test(localId)) return undefined;
+
+  const betweenRooms = localId.match(
+    /^between[_-]rooms?[_-]([a-z]?\d+[a-z]?)(?:[_-]and)?[_-]([a-z]?\d+[a-z]?)$/iu,
+  );
+  if (betweenRooms) {
+    return {
+      label: `between rooms ${betweenRooms[1]} and ${betweenRooms[2]}`,
+      kind: "semantic_node_id",
+    };
+  }
+
+  const tokens = localId.split(/[_\-\s]+/u).filter(Boolean);
+  const geometryIndex = tokens.findIndex((token) => GEOMETRY_WORDS[token.toLowerCase()] !== undefined);
+  if (geometryIndex < 0) return undefined;
+
+  const geometry = GEOMETRY_WORDS[tokens[geometryIndex]!.toLowerCase()]!;
+  const descriptors = tokens
+    .filter((_, index) => index !== geometryIndex)
+    .filter((token) => !isOpaqueToken(token));
+
+  if (descriptors.length === 0) {
+    return { label: `${geometry.article} ${geometry.noun}`, kind: "generic_geometry" };
+  }
+
+  const direction = descriptors.length === 1
+    && /^(?:north|south|east|west|northeast|northwest|southeast|southwest)$/iu.test(descriptors[0]!);
+  return {
+    label: direction
+      ? `the ${descriptors[0]!.toLowerCase()} ${geometry.noun}`
+      : `${titleCaseWords(descriptors)} ${geometry.noun}`,
+    kind: "semantic_node_id",
+  };
+}
+
+function metadataLabel(waypoint: z.infer<typeof waypointSchema>): string | undefined {
   return waypoint.shopName
     || waypoint.facilityName
     || waypoint.description
-    || "an unnamed location";
+    || undefined;
+}
+
+function withFallbackLabel(
+  waypoint: z.infer<typeof waypointSchema>,
+): z.infer<typeof waypointSchema> {
+  if (metadataLabel(waypoint)) return waypoint;
+  const fallback = deriveNodeIdFallback(waypoint.nodeId);
+  return fallback
+    ? { ...waypoint, fallbackLabel: fallback.label, fallbackLabelKind: fallback.kind }
+    : waypoint;
+}
+
+function waypointLabel(waypoint: z.infer<typeof waypointSchema>): string | undefined {
+  return metadataLabel(waypoint) || waypoint.fallbackLabel;
+}
+
+export function deriveRouteOverview(
+  steps: Array<{ step: number; type: string; toGraph?: string }>,
+): z.infer<typeof routeOverviewSchema> {
+  const transports = steps.filter((step) => step.type.toLowerCase() === "transport");
+  const transferGraphs = transports
+    .slice(0, -1)
+    .map((step) => step.toGraph)
+    .filter((graph): graph is string => Boolean(graph));
+  const isComplex = transports.length >= 2;
+
+  return {
+    isComplex,
+    transportCount: transports.length,
+    transferCount: Math.max(0, transports.length - 1),
+    transferGraphs,
+    initialGuidanceThroughStep: isComplex ? transports[0]?.step ?? null : null,
+  };
 }
 
 function normalizeRouteResponse(value: unknown): RouteResponse {
@@ -221,16 +345,25 @@ function normalizeRouteResponse(value: unknown): RouteResponse {
   const steps = raw.steps.map((step) => {
     const normalized = { ...step } as Record<string, unknown>;
     delete normalized.namedWaypoints;
+    delete normalized.from;
+    delete normalized.to;
 
-    const firstWaypoint = step.waypoints.at(0);
-    const lastWaypoint = step.waypoints.at(-1);
-    if (firstWaypoint) normalized.from = waypointLabel(firstWaypoint);
-    if (lastWaypoint) normalized.to = waypointLabel(lastWaypoint);
+    const waypoints = step.waypoints.map(withFallbackLabel);
+    normalized.waypoints = waypoints;
+
+    const firstLabel = waypoints.at(0) && waypointLabel(waypoints.at(0)!);
+    const lastLabel = waypoints.at(-1) && waypointLabel(waypoints.at(-1)!);
+    if (firstLabel) normalized.from = firstLabel;
+    if (lastLabel) normalized.to = lastLabel;
 
     return routeStepOutputSchema.parse(normalized);
   });
 
-  return routeResponseOutputSchema.parse({ ...raw, steps });
+  return routeResponseOutputSchema.parse({
+    ...raw,
+    steps,
+    routeOverview: deriveRouteOverview(steps),
+  });
 }
 
 function visibleWaypointLabels(step: z.infer<typeof routeStepOutputSchema>): string[] {
@@ -242,6 +375,7 @@ function visibleWaypointLabels(step: z.infer<typeof routeStepOutputSchema>): str
       return waypoint.narration === "explicit" || !waypoint.isTrivial;
     })
     .map(waypointLabel)
+    .filter((label): label is string => Boolean(label))
     .filter((label, index, all) => index === 0 || label !== all[index - 1]);
 }
 
@@ -262,8 +396,11 @@ function renderRouteSummary(route: RouteResponse): string {
 
   return [
     `Route found: ${route.steps.length} step(s), approximately ${Math.round(totalSeconds)} seconds.`,
+    route.routeOverview.isComplex
+      ? `Complex route: ${route.routeOverview.transportCount} transport rides with ${route.routeOverview.transferCount} transfer(s) at ${route.routeOverview.transferGraphs.join(", ") || "unnamed transfer points"}. Start with a short macro-route sentence, then narrate steps through step ${route.routeOverview.initialGuidanceThroughStep}, ending after arrival at the first transfer point.`
+      : "Simple route: give the first few actionable steps without a macro-route preface.",
     ...lines,
-    "Use structured waypoints for narration. Do not expose nodeId as a user-facing place name. Always communicate required actions.",
+    "Use metadata labels first. fallbackLabel is a cautious node-ID-derived hint: semantic_node_id may be phrased naturally, generic_geometry must stay generic, and waypoints without either metadata or fallbackLabel must be omitted. Never pronounce a raw nodeId. Always communicate required actions.",
   ].join("\n");
 }
 

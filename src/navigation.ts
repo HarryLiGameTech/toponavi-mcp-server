@@ -38,6 +38,10 @@ export type NavigationInput = z.infer<typeof navigationInputSchema>;
 const waypointSchema = z.object({
   nodeId: z.string(),
   graph: z.string(),
+  displayName: z.string().nullable().optional(),
+  display_name: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   shopName: z.string().nullable().optional(),
   facilityName: z.string().nullable().optional(),
@@ -234,6 +238,7 @@ const GEOMETRY_WORDS: Record<string, { noun: string; article: "a" | "an" }> = {
   corr: { noun: "corridor", article: "a" },
   hallway: { noun: "hallway", article: "a" },
   hall: { noun: "hall", article: "a" },
+  alley: { noun: "alley", article: "an" },
   lobby: { noun: "lobby", article: "a" },
   entrance: { noun: "entrance", article: "an" },
   exit: { noun: "exit", article: "an" },
@@ -245,13 +250,19 @@ const GEOMETRY_WORDS: Record<string, { noun: string; article: "a" | "an" }> = {
 };
 
 const NON_DESCRIPTIVE_TOKENS = new Set([
-  "a", "b", "c", "d", "in", "out", "inside", "outside", "end", "interm",
-  "intermediate", "node",
+  "a", "b", "c", "d", "e", "n", "s", "w", "in", "out", "inside",
+  "outside", "end", "interm", "intermediate", "internal", "node", "conn",
+  "connection", "start", "goal", "temp", "tmp",
+]);
+
+const NUMBERED_PLACE_WORDS = new Set([
+  "booth", "counter", "desk", "elevator", "entrance", "exit", "floor", "gate",
+  "lift", "platform", "room", "stair", "staircase", "zone",
 ]);
 
 function isOpaqueToken(token: string): boolean {
   return /^\d+$/u.test(token)
-    || /^[a-f\d]{6,}$/iu.test(token)
+    || /^(?=[a-f\d]{6,}$)(?=.*\d)[a-f\d]+$/iu.test(token)
     || /^[a-z]{1,4}\d+$/iu.test(token)
     || /^[A-Z]{2,5}$/u.test(token)
     || NON_DESCRIPTIVE_TOKENS.has(token.toLowerCase());
@@ -261,6 +272,20 @@ function titleCaseWords(tokens: string[]): string {
   return tokens
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
     .join(" ");
+}
+
+function semanticTokens(tokens: string[], excludedIndex?: number): string[] {
+  const result: string[] = [];
+  for (const [index, token] of tokens.entries()) {
+    if (index === excludedIndex) continue;
+    if (/^\d+$/u.test(token)) {
+      const previous = tokens[index - 1]?.toLowerCase();
+      if (previous && NUMBERED_PLACE_WORDS.has(previous)) result.push(token);
+      continue;
+    }
+    if (!isOpaqueToken(token)) result.push(token);
+  }
+  return result;
 }
 
 export function deriveNodeIdFallback(nodeId: string): NodeIdFallback | undefined {
@@ -279,31 +304,44 @@ export function deriveNodeIdFallback(nodeId: string): NodeIdFallback | undefined
 
   const tokens = localId.split(/[_\-\s]+/u).filter(Boolean);
   const geometryIndex = tokens.findIndex((token) => GEOMETRY_WORDS[token.toLowerCase()] !== undefined);
-  if (geometryIndex < 0) return undefined;
+  if (geometryIndex >= 0) {
+    const geometry = GEOMETRY_WORDS[tokens[geometryIndex]!.toLowerCase()]!;
+    const descriptors = semanticTokens(tokens, geometryIndex);
 
-  const geometry = GEOMETRY_WORDS[tokens[geometryIndex]!.toLowerCase()]!;
-  const descriptors = tokens
-    .filter((_, index) => index !== geometryIndex)
-    .filter((token) => !isOpaqueToken(token));
+    if (descriptors.length === 0) {
+      return { label: `${geometry.article} ${geometry.noun}`, kind: "generic_geometry" };
+    }
 
-  if (descriptors.length === 0) {
-    return { label: `${geometry.article} ${geometry.noun}`, kind: "generic_geometry" };
+    const direction = descriptors.length === 1
+      && /^(?:north|south|east|west|northeast|northwest|southeast|southwest)$/iu.test(descriptors[0]!);
+    return {
+      label: direction
+        ? `the ${descriptors[0]!.toLowerCase()} ${geometry.noun}`
+        : `${titleCaseWords(descriptors)} ${geometry.noun}`,
+      kind: "semantic_node_id",
+    };
   }
 
-  const direction = descriptors.length === 1
-    && /^(?:north|south|east|west|northeast|northwest|southeast|southwest)$/iu.test(descriptors[0]!);
+  const semantic = semanticTokens(tokens);
+  if (semantic.length === 0) return undefined;
   return {
-    label: direction
-      ? `the ${descriptors[0]!.toLowerCase()} ${geometry.noun}`
-      : `${titleCaseWords(descriptors)} ${geometry.noun}`,
+    label: semantic.length === 1
+      ? semantic[0]!.toLowerCase()
+      : titleCaseWords(semantic),
     kind: "semantic_node_id",
   };
 }
 
 function metadataLabel(waypoint: z.infer<typeof waypointSchema>): string | undefined {
-  return waypoint.shopName
+  return waypoint.displayName
+    || waypoint.display_name
+    || waypoint.shopName
     || waypoint.facilityName
+    || waypoint.label
+    || waypoint.name
     || waypoint.description
+    || waypoint.shopCategory
+    || waypoint.facilityCategory
     || undefined;
 }
 
@@ -372,7 +410,7 @@ function visibleWaypointLabels(step: z.infer<typeof routeStepOutputSchema>): str
       const isEndpoint = index === 0 || index === all.length - 1;
       if (isEndpoint) return true;
       if (waypoint.narration === "implicit") return false;
-      return waypoint.narration === "explicit" || !waypoint.isTrivial;
+      return waypoint.narration === "explicit" || Boolean(waypointLabel(waypoint));
     })
     .map(waypointLabel)
     .filter((label): label is string => Boolean(label))
@@ -400,7 +438,7 @@ function renderRouteSummary(route: RouteResponse): string {
       ? `Complex route: ${route.routeOverview.transportCount} transport rides with ${route.routeOverview.transferCount} transfer(s) at ${route.routeOverview.transferGraphs.join(", ") || "unnamed transfer points"}. Start with a short macro-route sentence, then narrate steps through step ${route.routeOverview.initialGuidanceThroughStep}, ending after arrival at the first transfer point.`
       : "Simple route: give the first few actionable steps without a macro-route preface.",
     ...lines,
-    "Use metadata labels first. fallbackLabel is a cautious node-ID-derived hint: semantic_node_id may be phrased naturally, generic_geometry must stay generic, and waypoints without either metadata or fallbackLabel must be omitted. Never pronounce a raw nodeId. Always communicate required actions.",
+    "Metadata is authoritative: always use displayName, shopName, facilityName, description, or equivalent metadata when present, and never replace it with a node-ID interpretation. Only when metadata is absent, fallbackLabel may be used: semantic_node_id may be spoken when its direct meaning is clear, while generic_geometry must stay generic. Numeric and one-letter compass-like suffixes are intentionally removed unless the number belongs to a conventionally numbered place such as a room, gate, or booth. Omit opaque IDs and never pronounce raw identifier syntax. Always communicate required actions.",
   ].join("\n");
 }
 

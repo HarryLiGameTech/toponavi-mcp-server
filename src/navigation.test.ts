@@ -101,7 +101,78 @@ describe("indoor-navigation-path-query handler", () => {
       label: "a hall",
       kind: "generic_geometry",
     });
+    expect(deriveNodeIdFallback("cashier")).toEqual({
+      label: "cashier",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("reception_N")).toEqual({
+      label: "reception",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("toilet_0715_out")).toEqual({
+      label: "toilet",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("sofa_W")).toEqual({
+      label: "sofa",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("facade")).toEqual({
+      label: "facade",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("room_312")).toEqual({
+      label: "Room 312",
+      kind: "semantic_node_id",
+    });
+    expect(deriveNodeIdFallback("skywalk_booth_2")).toEqual({
+      label: "Skywalk Booth 2",
+      kind: "semantic_node_id",
+    });
     expect(deriveNodeIdFallback("n_3e44fa1b")).toBeUndefined();
+  });
+
+  it("uses authoritative metadata instead of semantic node-ID fallbacks", async () => {
+    const metadataResponse = JSON.parse(JSON.stringify(routeResponse));
+    metadataResponse.steps[0].waypoints[0] = {
+      ...metadataResponse.steps[0].waypoints[0],
+      nodeId: "cashier_0715",
+      displayName: "Main payment desk",
+      description: null,
+    };
+    const { client } = mockClientWith({ data: metadataResponse });
+    const result = await createPlanRouteHandler(client)({
+      buildingName: "swfc",
+      startNode: "LowerLobby::cashier_0715",
+      endNode: "LowerLobby::internal_goal",
+      userParams: {},
+      traversalPreference: { routePlanningPreference: "MinimizeTime", banTags: [] },
+    });
+    const waypoint = (result.structuredContent as any).steps[0].waypoints[0];
+    expect(waypoint.displayName).toBe("Main payment desk");
+    expect(waypoint.fallbackLabel).toBeUndefined();
+    expect((result.structuredContent as any).steps[0].from).toBe("Main payment desk");
+  });
+
+  it("includes semantic fallback labels for otherwise trivial intermediate nodes", async () => {
+    const semanticResponse = JSON.parse(JSON.stringify(routeResponse));
+    semanticResponse.steps[0].waypoints.splice(1, 0, {
+      nodeId: "cashier_0715",
+      graph: "LowerLobby",
+      tags: [],
+      narration: null,
+      isTrivial: true,
+      isIntermediate: true,
+    });
+    const { client } = mockClientWith({ data: semanticResponse });
+    const result = await createPlanRouteHandler(client)({
+      buildingName: "swfc",
+      startNode: "LowerLobby::internal_start",
+      endNode: "LowerLobby::internal_goal",
+      userParams: {},
+      traversalPreference: { routePlanningPreference: "MinimizeTime", banTags: [] },
+    });
+    expect(result.content[0].text).toContain("cashier");
   });
 
   it("derives macro-route transfers and the first-transfer boundary", () => {

@@ -25,6 +25,11 @@ import {
   navigationInputSchema,
   navigationOutputSchema,
 } from "./navigation.js";
+import {
+  createResolvePlaceHandler,
+  placeResolutionInputSchema,
+  placeResolutionOutputSchema,
+} from "./place-resolution.js";
 
 // ---------------------------------------------------------------------------
 // Server instantiation
@@ -39,6 +44,7 @@ const server = new McpServer({
     "Never present nodeId as a user-facing place name; prefer shopName, facilityName, or description.",
     "Always communicate requiredActions and requiredActionEvents.",
     "Treat route-tool business errors as recoverable constraints and do not silently relax user banTags.",
+    "For a fuzzy destination, separate the user's floor or area phrase into submapHint and the place phrase into placeHint, then call indoor-navigation-place-resolve before route planning.",
   ].join(" "),
 });
 
@@ -91,69 +97,16 @@ server.registerTool(
   }
 );
 
-// TODO(agentic-navigation): Restore fuzzy submap resolution as a dedicated tool.
-// It should query the current quick-demo-available-submaps endpoint, accept a
-// user-provided incomplete submap name, and return ranked exact submap names.
-// Keep node-name resolution separate: first resolve the submap, then search
-// nodes within that exact submap. Replace the stale commented endpoint below
-// and return multiple candidates when confidence is ambiguous.
-// Helper function to find the best matching submap name
-function findBestMatch(fuzzyName: string, availableNames: string[]): string | null {
-  if (!availableNames || availableNames.length === 0) return null;
-
-  const lowerFuzzy = fuzzyName.toLowerCase();
-  let bestMatch: string | null = null;
-  let highestScore = 0;
-
-  for (const name of availableNames) {
-    const lowerName = name.toLowerCase();
-    let score = 0;
-
-    // Check for exact match (case-insensitive)
-    if (lowerName === lowerFuzzy) {
-      return name; // Perfect match
-    }
-
-    // Check if fuzzy name is contained in available name
-    if (lowerName.includes(lowerFuzzy)) {
-      score += 0.8;
-    }
-
-    // Check if available name is contained in fuzzy name
-    if (lowerFuzzy.includes(lowerName)) {
-      score += 0.7;
-    }
-
-    // Check for partial overlap
-    const overlap = calculateOverlap(lowerFuzzy, lowerName);
-    score += overlap * 0.6;
-
-    // Bonus for similar length ratio
-    const lengthRatio = Math.min(lowerFuzzy.length, lowerName.length) / Math.max(lowerFuzzy.length, lowerName.length);
-    score += lengthRatio * 0.3;
-
-    if (score > highestScore && score > 0.5) { // Minimum threshold
-      highestScore = score;
-      bestMatch = name;
-    }
-  }
-
-  return bestMatch;
-}
-
-// Helper function to calculate character overlap between two strings
-function calculateOverlap(str1: string, str2: string): number {
-  let overlap = 0;
-  const maxLength = Math.min(str1.length, str2.length);
-
-  for (let i = 0; i < maxLength; i++) {
-    if (str1[i] === str2[i]) {
-      overlap++;
-    }
-  }
-
-  return overlap / Math.max(str1.length, str2.length);
-}
+server.registerTool(
+  "indoor-navigation-place-resolve",
+  {
+    title: "Indoor Navigation Place Resolver",
+    description: "Resolve a user-provided fuzzy destination against the parameter-specific compiled TopoNavi catalog. Separate an explicit floor or area phrase into submapHint and the remaining facility or shop phrase into placeHint. Returns a canonical nodeId only when the match is unique; when candidates remain, ask the user one short clarification question and never guess or expose internal IDs.",
+    inputSchema: placeResolutionInputSchema,
+    outputSchema: placeResolutionOutputSchema,
+  },
+  createResolvePlaceHandler(),
+);
 
 server.registerTool(
   "indoor-navigation-path-query",
@@ -166,37 +119,6 @@ server.registerTool(
   createPlanRouteHandler(),
 );
 
-
-// server.registerTool(
-//   "indoor-navigation-submap-name-query",
-//   {
-//     title: "Indoor Navigation Submap Name Query",
-//     description: "A tool to query indoor navigation submaps by name. The input is an user-prompted fuzzy submap name (not exactly equal to the defined submap name inside the database), and the tool will return the corresponding exact submap name.",
-//     inputSchema: z.object({
-//       fuzzySubmapName: z.string().describe("The fuzzy submap name that the user prompted"),
-//     }),
-//   },
-//   async ({ fuzzySubmapName }) => {
-//     // Make HTTP request to your Spring Boot backend
-//     const response = await axios.get("http://192.168.50.65:8080/api/v1/quick-demo-available-nodes", {
-//       params: { fuzzySubmapName: fuzzySubmapName },
-//     });
-
-//     const { availableFiles } = response.data;
-
-//     // Find the best matching submap name from available ones
-//     const bestMatch = findBestMatch(fuzzySubmapName, availableFiles);
-
-//     return {
-//       content: [
-//         {
-//           type: "text",
-//           text: `Based on your fuzzy submap name "${fuzzySubmapName}", the exact submap name is:\n\n${bestMatch || 'No matching submap found'}`
-//         },
-//       ],
-//     };
-//   }
-// );
 
 // ---------------------------------------------------------------------------
 // RESOURCES

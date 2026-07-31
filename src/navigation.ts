@@ -446,6 +446,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function recoveryHintFor(code: string): string {
+  switch (code) {
+    case "DESTINATION_HAS_BANNED_TAG":
+      return "The destination conflicts with the requested banTags. Ask before relaxing the ban.";
+    case "NO_ROUTE_WITH_BAN_TAGS":
+      return "No route remains under the requested banTags. Ask whether the user wants to relax one of them.";
+    case "NO_ROUTE_FOR_USER_PARAMS":
+      return "No route remains in the topology compiled for the supplied access and capability parameters. Explain that the route is unavailable with the current settings, and ask before changing any card, key, or capability value.";
+    case "NO_ROUTE_FOUND":
+      return "No route exists between these locations in the compiled topology. Do not describe this as a temporary service failure.";
+    case "TRAVERSAL_PREFERENCE_NOT_IMPLEMENTED":
+      return "Do not retry with the unsupported preference fields.";
+    default:
+      return "Check the request and backend availability before retrying.";
+  }
+}
+
 function errorResult(
   error: unknown,
   appliedUserParams?: Record<string, boolean | number | string>,
@@ -477,17 +494,7 @@ function errorResult(
       details.plannerMessage = legacyPlannerMessage;
       if (appliedUserParams) details.userParams = appliedUserParams;
     }
-    const recoveryHint = code === "DESTINATION_HAS_BANNED_TAG"
-      ? "The destination conflicts with the requested banTags. Ask before relaxing the ban."
-      : code === "NO_ROUTE_WITH_BAN_TAGS"
-        ? "No route remains under the requested banTags. Ask whether the user wants to relax one of them."
-        : code === "NO_ROUTE_FOR_USER_PARAMS"
-          ? "No route remains in the topology compiled for the supplied access and capability parameters. Explain that the route is unavailable with the current settings, and ask before changing any card, key, or capability value."
-          : code === "NO_ROUTE_FOUND"
-            ? "No route exists between these locations in the compiled topology. Do not describe this as a temporary service failure."
-        : code === "TRAVERSAL_PREFERENCE_NOT_IMPLEMENTED"
-          ? "Do not retry with the unsupported preference fields."
-          : "Check the request and backend availability before retrying.";
+    const recoveryHint = recoveryHintFor(code);
 
     const payload: Record<string, unknown> = {
       status: "error",

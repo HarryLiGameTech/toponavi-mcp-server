@@ -30,6 +30,11 @@ import {
   placeResolutionInputSchema,
   placeResolutionOutputSchema,
 } from "./place-resolution.js";
+import {
+  createFilteredQueryHandler,
+  filteredQueryInputSchema,
+  filteredQueryOutputSchema,
+} from "./filtered-query.js";
 
 // ---------------------------------------------------------------------------
 // Server instantiation
@@ -45,6 +50,7 @@ const server = new McpServer({
     "Always communicate requiredActions and requiredActionEvents.",
     "Treat route-tool business errors as recoverable constraints and do not silently relax user banTags.",
     "For a fuzzy destination, separate the user's floor or area phrase into submapHint and the place phrase into placeHint, then call indoor-navigation-place-resolve before route planning.",
+    "For discovery questions about available places or traversable segments, call indoor-navigation-filtered-query with tag, shop_category, or action_required filters. Filter fields are ANDed while values within one field are ORed. If it returns needs_interpretation, choose a canonical candidate and call the tool again before answering.",
   ].join(" "),
 });
 
@@ -95,6 +101,17 @@ server.registerTool(
       ],
     };
   }
+);
+
+server.registerTool(
+  "indoor-navigation-filtered-query",
+  {
+    title: "Indoor Navigation Filtered Query",
+    description: "Search the parameter-specific compiled topology by fuzzy tag, shop_category, or action_required values. Different filter fields are ANDed; values inside one field are ORed. Node queries support tag and shop_category. Edge queries use action_required with optional edge tags and return up to five direct neighboring nodes per segment. If any interpretation is below 50% confidence, the tool returns needs_interpretation without searching; choose a canonical candidate and call again.",
+    inputSchema: filteredQueryInputSchema,
+    outputSchema: filteredQueryOutputSchema,
+  },
+  createFilteredQueryHandler(),
 );
 
 server.registerTool(

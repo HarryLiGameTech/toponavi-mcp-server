@@ -93,6 +93,21 @@ tags, required actions, applied preferences, and machine-readable business
 errors. `minimizeTag`, `maximizeTag`, and `riskPreference` are intentionally not
 advertised until their backend behavior is implemented.
 
+### Discovery tool
+
+`indoor-navigation-filtered-query` searches the parameter-specific compiled
+topology using fuzzy `tag`, `shop_category`, and `action_required` filters.
+Different fields are ANDed, while multiple values inside one field are ORed.
+
+Queries containing `action_required` return matching compiled edges. Each edge
+includes up to five direct neighboring nodes, merged from both endpoints and
+ordered by edge cost. Node queries support `tag` and `shop_category`.
+
+The tool resolves common synonyms such as `bathroom` to `toilet` and `walk thru
+the bridge` to `cross_bridge`. An interpretation below 50% confidence returns
+`needs_interpretation` without search results. The agent must choose a returned
+canonical candidate and make a second call before answering.
+
 ---
 
 ## Connecting to Claude Desktop

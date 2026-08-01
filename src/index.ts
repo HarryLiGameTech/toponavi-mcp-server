@@ -35,6 +35,11 @@ import {
   filteredQueryInputSchema,
   filteredQueryOutputSchema,
 } from "./filtered-query.js";
+import {
+  createElevatorQueryHandler,
+  elevatorQueryInputSchema,
+  elevatorQueryOutputSchema,
+} from "./elevator-query.js";
 
 // ---------------------------------------------------------------------------
 // Server instantiation
@@ -51,6 +56,7 @@ const server = new McpServer({
     "Treat route-tool business errors as recoverable constraints and do not silently relax user banTags.",
     "For a fuzzy destination, separate the user's floor or area phrase into submapHint and the place phrase into placeHint, then call indoor-navigation-place-resolve before route planning.",
     "For discovery questions about available places or traversable segments, call indoor-navigation-filtered-query with tag, shop_category, or action_required filters. Filter fields are ANDed while values within one field are ORed. If it returns needs_interpretation, choose a canonical candidate and call the tool again before answering.",
+    "For elevator-only discovery questions, call indoor-navigation-elevator-query with simple=true instead of searching elevator-hall nodes. Keep the entire spoken answer within 35 English words and three short sentences, including the notice and question. Use stop ranges or differences rather than enumerating every stop. Never speak raw transportId syntax: render a clearly semantic ID naturally, such as 'north elevator', and call an opaque ID 'an elevator group'. Always say the elevator information is for reference only because local access policies may apply. Ask which group the user wants examined more closely; after they choose, call again with simple=false and its transportId. Never invent a missing displayName.",
   ].join(" "),
 });
 
@@ -101,6 +107,17 @@ server.registerTool(
       ],
     };
   }
+);
+
+server.registerTool(
+  "indoor-navigation-elevator-query",
+  {
+    title: "Indoor Navigation Elevator Query",
+    description: "Query elevator transport declarations from the parameter-specific compiled topology. Start with simple=true to get transport IDs and served-stop labels. If the user requests details for one result, call again with simple=false and that transportId to get its explicit nullable displayName plus stop labels, exact node IDs, and locations. Do not use elevator-hall nodes as evidence. Every user-facing answer must say this information is for reference and practical access constraints may apply under local policies.",
+    inputSchema: elevatorQueryInputSchema,
+    outputSchema: elevatorQueryOutputSchema,
+  },
+  createElevatorQueryHandler(),
 );
 
 server.registerTool(

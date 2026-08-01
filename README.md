@@ -108,6 +108,21 @@ the bridge` to `cross_bridge`. An interpretation below 50% confidence returns
 `needs_interpretation` without search results. The agent must choose a returned
 canonical candidate and make a second call before answering.
 
+### Elevator query tool
+
+`indoor-navigation-elevator-query` reads elevator transport declarations from
+the parameter-specific compiled topology. It does not discover elevators from
+elevator-hall node names.
+
+Use `simple: true` for the initial overview. This returns only `transportId` and
+`servedStops` for each elevator. After the user chooses an elevator and asks for
+more detail, call again with `simple: false` and its `transportId`; the full form
+returns the explicitly declared nullable `displayName` and each stop's `label`,
+`nodeId`, and `location`.
+
+Every user-facing elevator answer must state that the information is for
+reference and practical access constraints may apply under local policies.
+
 ---
 
 ## Connecting to Claude Desktop

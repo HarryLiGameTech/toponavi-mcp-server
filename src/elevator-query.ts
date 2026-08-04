@@ -1,13 +1,18 @@
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
+import {
+  BUILDING_NAME_INPUT_DESCRIPTION,
+  BuildingResolutionError,
+  resolveBackendBuildingName,
+} from "./building-resolution.js";
 import { topoNaviHttpClient } from "./navigation.js";
 
 const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 export const elevatorQueryInputSchema = z.object({
   buildingName: z.string().trim().min(1).default("swfc").describe(
-    "Backend example-building identifier.",
+    BUILDING_NAME_INPUT_DESCRIPTION,
   ),
   simple: z.boolean().default(true).describe(
     "Use true for the initial elevator overview. Use false only after the user asks for a closer look.",
@@ -54,6 +59,7 @@ export const elevatorQueryOutputSchema = z.object({
   followUpInstruction: z.string().optional(),
   code: z.string().optional(),
   message: z.string().optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
   httpStatus: z.number().int().optional(),
 });
 
@@ -79,6 +85,20 @@ function renderResult(result: ElevatorQueryOutput): string {
 }
 
 function errorResult(error: unknown): ElevatorQueryToolResult {
+  if (error instanceof BuildingResolutionError) {
+    const payload: ElevatorQueryOutput = {
+      status: "error",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    };
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      structuredContent: payload,
+    };
+  }
+
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
     const payload: ElevatorQueryOutput = {
@@ -112,10 +132,11 @@ export function createElevatorQueryHandler(
   return async (value: ElevatorQueryInput): Promise<ElevatorQueryToolResult> => {
     try {
       const input = elevatorQueryInputSchema.parse(value);
+      const buildingName = resolveBackendBuildingName(input.buildingName);
       const response = await httpClient.post(
         "/api/v1/quick-demo-elevators",
         { userParams: input.userParams },
-        { params: { buildingName: input.buildingName, simple: input.simple } },
+        { params: { buildingName, simple: input.simple } },
       );
       const parsed = backendElevatorResponseSchema.parse(response.data);
       const transports = input.transportId

@@ -1,13 +1,18 @@
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
+import {
+  BUILDING_NAME_INPUT_DESCRIPTION,
+  BuildingResolutionError,
+  resolveBackendBuildingName,
+} from "./building-resolution.js";
 import { deriveNodeIdFallback, topoNaviHttpClient } from "./navigation.js";
 
 const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 export const placeResolutionInputSchema = z.object({
   buildingName: z.string().trim().min(1).describe(
-    "Exact backend building identifier, such as 'indigoBJ'.",
+    BUILDING_NAME_INPUT_DESCRIPTION,
   ),
   rawQuery: z.string().trim().min(1).describe(
     "The user's original destination phrase. Preserve it even when structured hints are supplied.",
@@ -104,6 +109,14 @@ const CONNECTOR_NODE_TOKENS = new Set([
   "conn", "connection", "end", "inner", "interm", "intermediate", "intersect",
   "intersact", "junction", "link", "outer", "outside",
 ]);
+const PLACE_QUERY_EQUIVALENTS = [
+  ["北门", "north gate", "north entrance"],
+  ["南门", "south gate", "south entrance"],
+  ["东门", "east gate", "east entrance"],
+  ["西门", "west gate", "west entrance"],
+  ["入口", "entrance", "gate"],
+  ["出口", "exit"],
+] as const;
 
 function normalizeText(value: string): string {
   return value
@@ -161,6 +174,15 @@ function graphAliases(graphId: string): string[] {
   return [...aliases];
 }
 
+function explicitSubmapHint(rawQuery: string): string | undefined {
+  const latinMatch = rawQuery.match(/\b(?:l|level|floor)\s*[-_]?\s*(\d+)\b/iu)
+    || rawQuery.match(/\b(\d+)\s*f\b/iu);
+  if (latinMatch?.[1]) return `Level${Number(latinMatch[1])}`;
+
+  const chineseMatch = rawQuery.match(/第?\s*(\d+)\s*[层樓楼]/u);
+  return chineseMatch?.[1] ? `Level${Number(chineseMatch[1])}` : undefined;
+}
+
 function tokenSubset(query: string, candidate: string): boolean {
   const queryTokens = normalizeText(query).split(" ").filter(Boolean);
   const candidateTokens = new Set(normalizeText(candidate).split(" ").filter(Boolean));
@@ -177,6 +199,25 @@ function scorePhrase(query: string, candidate: string): number {
   if (normalizedCandidate.includes(normalizedQuery) && normalizedQuery.length >= 3) return 0.9;
   if (tokenSubset(normalizedQuery, normalizedCandidate)) return 0.86;
   return 0;
+}
+
+function equivalentPlaceQueries(query: string): string[] {
+  const normalizedQuery = normalizeText(query);
+  const variants = new Set<string>();
+
+  for (const group of PLACE_QUERY_EQUIVALENTS) {
+    for (const source of group) {
+      const normalizedSource = normalizeText(source);
+      if (!normalizedSource || !normalizedQuery.includes(normalizedSource)) continue;
+      for (const replacement of group) {
+        const normalizedReplacement = normalizeText(replacement);
+        const variant = normalizedQuery.replaceAll(normalizedSource, normalizedReplacement).trim();
+        if (variant && compact(variant) !== compact(normalizedQuery)) variants.add(variant);
+      }
+    }
+  }
+
+  return [...variants];
 }
 
 function rankSubmaps(hint: string, graphIds: string[]): RankedSubmap[] {
@@ -298,25 +339,62 @@ function scoreNode(
   };
 }
 
-function placeQueryFor(input: PlaceResolutionInput): string {
+function placeQueryFor(input: PlaceResolutionInput, submapHint?: string): string {
   if (input.placeHint) return input.placeHint;
-  if (!input.submapHint) return input.rawQuery;
+  if (!submapHint) return input.rawQuery;
 
   const raw = normalizeText(input.rawQuery);
-  const scope = normalizeText(input.submapHint);
-  const withoutScope = raw.replace(scope, " ")
-    .replace(/\b(?:on|at|in|the|of)\b/gu, " ")
+  const scope = normalizeText(submapHint);
+  const buildingName = normalizeText(input.buildingName);
+  const withoutScope = raw
+    .replace(/\b(?:l|level|floor)\s*[-_]?\s*\d+\b/giu, " ")
+    .replace(/\b\d+\s*f\b/giu, " ")
+    .replace(/第?\s*\d+\s*[层樓楼]/gu, " ")
+    .replace(scope, " ")
+    .replace(buildingName, " ")
+    .replace(/\b(?:on|at|in|the|of)\b|的/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   return withoutScope || input.rawQuery;
 }
 
-function baseQuery(input: PlaceResolutionInput, placeHint: string) {
+function baseQuery(input: PlaceResolutionInput, placeHint: string, submapHint?: string) {
   return {
     rawQuery: input.rawQuery,
-    ...(input.submapHint ? { submapHint: input.submapHint } : {}),
+    ...(submapHint ? { submapHint } : {}),
     placeHint,
   };
+}
+
+function rankPlaceCandidates(
+  entries: Array<[string, NodeAttributes]>,
+  query: string,
+  matchPrefix?: string,
+): PlaceCandidate[] {
+  return entries
+    .map(([nodeId, attributes]) => scoreNode(nodeId, attributes, query))
+    .filter((candidate): candidate is PlaceCandidate => Boolean(candidate))
+    .map((candidate) => matchPrefix
+      ? { ...candidate, matchBasis: `${matchPrefix}:${candidate.matchBasis}` }
+      : candidate)
+    .sort((left, right) => right.confidence - left.confidence || left.nodeId.localeCompare(right.nodeId));
+}
+
+function rankEquivalentPlaceCandidates(
+  entries: Array<[string, NodeAttributes]>,
+  placeHint: string,
+): PlaceCandidate[] {
+  const bestByNodeId = new Map<string, PlaceCandidate>();
+  for (const equivalentQuery of equivalentPlaceQueries(placeHint)) {
+    for (const candidate of rankPlaceCandidates(entries, equivalentQuery, "query_alias")) {
+      const current = bestByNodeId.get(candidate.nodeId);
+      if (!current || candidate.confidence > current.confidence) {
+        bestByNodeId.set(candidate.nodeId, candidate);
+      }
+    }
+  }
+  return [...bestByNodeId.values()]
+    .sort((left, right) => right.confidence - left.confidence || left.nodeId.localeCompare(right.nodeId));
 }
 
 export function resolvePlaceFromCatalog(
@@ -324,18 +402,19 @@ export function resolvePlaceFromCatalog(
   catalog: Record<string, NodeAttributes>,
 ): PlaceResolutionOutput {
   const input = placeResolutionInputSchema.parse(value);
-  const placeHint = placeQueryFor(input);
-  const query = baseQuery(input, placeHint);
+  const submapHint = input.submapHint || explicitSubmapHint(input.rawQuery);
+  const placeHint = placeQueryFor(input, submapHint);
+  const query = baseQuery(input, placeHint, submapHint);
   const graphIds = [...new Set(Object.keys(catalog).map((nodeId) => nodeId.split("::", 1)[0]!))].sort();
 
   let resolvedSubmap: RankedSubmap | undefined;
-  if (input.submapHint) {
-    const submapCandidates = rankSubmaps(input.submapHint, graphIds);
+  if (submapHint) {
+    const submapCandidates = rankSubmaps(submapHint, graphIds);
     if (submapCandidates.length === 0) {
       return {
         status: "not_found",
         query,
-        message: `No compiled submap matches '${input.submapHint}'.`,
+        message: `No compiled submap matches '${submapHint}'.`,
       };
     }
     const next = submapCandidates[1];
@@ -351,13 +430,15 @@ export function resolvePlaceFromCatalog(
       };
     }
     resolvedSubmap = submapCandidates[0];
+    query.submapHint = resolvedSubmap.graphId;
   }
 
-  const candidates = Object.entries(catalog)
-    .filter(([nodeId]) => !resolvedSubmap || nodeId.startsWith(`${resolvedSubmap.graphId}::`))
-    .map(([nodeId, attributes]) => scoreNode(nodeId, attributes, placeHint))
-    .filter((candidate): candidate is PlaceCandidate => Boolean(candidate))
-    .sort((left, right) => right.confidence - left.confidence || left.nodeId.localeCompare(right.nodeId));
+  const scopedEntries = Object.entries(catalog)
+    .filter(([nodeId]) => !resolvedSubmap || nodeId.startsWith(`${resolvedSubmap.graphId}::`));
+  const directCandidates = rankPlaceCandidates(scopedEntries, placeHint);
+  const candidates = directCandidates.length > 0
+    ? directCandidates
+    : rankEquivalentPlaceCandidates(scopedEntries, placeHint);
 
   if (candidates.length === 0) {
     return {
@@ -418,6 +499,20 @@ function renderResult(result: PlaceResolutionOutput): string {
 }
 
 function errorResult(error: unknown): PlaceResolutionToolResult {
+  if (error instanceof BuildingResolutionError) {
+    const payload: PlaceResolutionOutput = {
+      status: "error",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    };
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      structuredContent: payload,
+    };
+  }
+
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
     const payload: PlaceResolutionOutput = {
@@ -451,12 +546,13 @@ export function createResolvePlaceHandler(
   return async (value: PlaceResolutionInput): Promise<PlaceResolutionToolResult> => {
     try {
       const input = placeResolutionInputSchema.parse(value);
+      const buildingName = resolveBackendBuildingName(input.buildingName);
       const response = await httpClient.post(
         "/api/v1/quick-demo-all-available-nodes",
         { userParams: input.userParams },
         {
           params: {
-            buildingName: input.buildingName,
+            buildingName,
             withNodesAttributes: "true",
           },
         },

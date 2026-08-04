@@ -54,7 +54,8 @@ const server = new McpServer({
     "Never present nodeId as a user-facing place name; prefer shopName, facilityName, or description.",
     "Always communicate requiredActions and requiredActionEvents.",
     "Treat route-tool business errors as recoverable constraints and do not silently relax user banTags.",
-    "For a fuzzy destination, separate the user's floor or area phrase into submapHint and the place phrase into placeHint, then call indoor-navigation-place-resolve before route planning.",
+    "Pass the user's Chinese building name, abbreviation, or building ID through unchanged. Each TopoNavi tool resolves the supported building deterministically; do not translate or guess a backend identifier.",
+    "For a fuzzy destination, preserve the user's language, separate the floor or area phrase into submapHint and the place phrase into placeHint, then call indoor-navigation-place-resolve before route planning. Never translate or rewrite the place phrase for retries; the resolver owns deterministic aliases and always preserves its resolved floor scope.",
     "For discovery questions about available places or traversable segments, call indoor-navigation-filtered-query with tag, shop_category, or action_required filters. Filter fields are ANDed while values within one field are ORed. If it returns needs_interpretation, choose a canonical candidate and call the tool again before answering.",
     "For elevator-only discovery questions, call indoor-navigation-elevator-query with simple=true instead of searching elevator-hall nodes. Keep the entire spoken answer within 35 English words and three short sentences, including the notice and question. Use stop ranges or differences rather than enumerating every stop. Never speak raw transportId syntax: render a clearly semantic ID naturally, such as 'north elevator', and call an opaque ID 'an elevator group'. Always say the elevator information is for reference only because local access policies may apply. Ask which group the user wants examined more closely; after they choose, call again with simple=false and its transportId. Never invent a missing displayName.",
   ].join(" "),
@@ -135,7 +136,7 @@ server.registerTool(
   "indoor-navigation-place-resolve",
   {
     title: "Indoor Navigation Place Resolver",
-    description: "Resolve a user-provided fuzzy destination against the parameter-specific compiled TopoNavi catalog. Separate an explicit floor or area phrase into submapHint and the remaining facility or shop phrase into placeHint. Returns a canonical nodeId only when the match is unique; when candidates remain, ask the user one short clarification question and never guess or expose internal IDs.",
+    description: "Resolve a user-provided fuzzy destination against the parameter-specific compiled TopoNavi catalog. Preserve the user's language and separate an explicit floor or area phrase into submapHint and the remaining facility or shop phrase into placeHint. The resolver applies deterministic aliases without leaving the resolved floor. Returns a canonical nodeId only when the match is unique; when candidates remain, ask the user one short clarification question and never guess or expose internal IDs.",
     inputSchema: placeResolutionInputSchema,
     outputSchema: placeResolutionOutputSchema,
   },

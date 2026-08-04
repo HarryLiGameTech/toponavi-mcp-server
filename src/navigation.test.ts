@@ -142,7 +142,7 @@ describe("indoor-navigation-path-query handler", () => {
     };
     const { client } = mockClientWith({ data: metadataResponse });
     const result = await createPlanRouteHandler(client)({
-      buildingName: "swfc",
+      buildingName: "上海环球金融中心",
       startNode: "LowerLobby::cashier_0715",
       endNode: "LowerLobby::internal_goal",
       userParams: {},

@@ -33,6 +33,15 @@ const catalog = {
     shop_name: "STARBUCKS 星巴克",
     shop_category: "Full-service cafe",
   },
+  "Level1::garden_north_gate": {
+    tags: ["indoor", "automatic_door"],
+    aliases: ["北门", "花园北门", "L1北门", "north gate"],
+  },
+  "Level3::shop_359": {
+    tags: ["indoor", "shop"],
+    shop_name: "麦当劳",
+    shop_category: "Fast-food restaurant",
+  },
 };
 
 function input(overrides: Partial<PlaceResolutionInput>): PlaceResolutionInput {
@@ -130,6 +139,133 @@ describe("indoor-navigation-place-resolve", () => {
     });
   });
 
+  it("extracts L1, preserves its scope, and resolves the configured Chinese gate alias deterministically", () => {
+    const results = Array.from({ length: 10 }, () => resolvePlaceFromCatalog(
+      input({
+        rawQuery: "indigoBJ L1 的北门",
+        placeHint: undefined,
+      }),
+      {
+        ...catalog,
+        "Level2::north_gate": {
+          tags: ["indoor", "gate"],
+          aliases: ["北门", "north gate"],
+        },
+      },
+    ));
+
+    for (const result of results) {
+      expect(result).toMatchObject({
+        status: "resolved",
+        query: {
+          submapHint: "Level1",
+          placeHint: "北门",
+        },
+        resolvedSubmap: {
+          graphId: "Level1",
+        },
+        place: {
+          nodeId: "Level1::garden_north_gate",
+          matchBasis: "alias",
+          matchedText: "北门",
+        },
+      });
+    }
+  });
+
+  it("resolves the destination floor and Chinese shop name deterministically", () => {
+    const results = Array.from({ length: 10 }, () => resolvePlaceFromCatalog(
+      input({
+        rawQuery: "L3 的麦当劳",
+        placeHint: undefined,
+      }),
+      catalog,
+    ));
+
+    expect(results.every((result) =>
+      result.status === "resolved" && result.place?.nodeId === "Level3::shop_359"
+    )).toBe(true);
+  });
+
+  it("uses deterministic translation aliases only after direct scoped matching finds nothing", () => {
+    const result = resolvePlaceFromCatalog(
+      input({
+        rawQuery: "L1 的北门",
+        submapHint: "L1",
+        placeHint: "北门",
+      }),
+      {
+        "Level1::garden_north_gate": { tags: ["indoor", "automatic_door"] },
+        "Level2::north_gate": { tags: ["indoor", "gate"] },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "resolved",
+      resolvedSubmap: { graphId: "Level1" },
+      place: {
+        nodeId: "Level1::garden_north_gate",
+        matchBasis: "query_alias:semantic_node_id",
+      },
+    });
+  });
+
+  it("returns all same-floor translated candidates as ambiguous", () => {
+    const result = resolvePlaceFromCatalog(
+      input({
+        rawQuery: "L1 的北门",
+        submapHint: "L1",
+        placeHint: "北门",
+      }),
+      {
+        "Level1::north_gate_a": { tags: ["indoor", "gate"] },
+        "Level1::north_gate_b": { tags: ["indoor", "gate"] },
+        "Level2::north_gate": { tags: ["indoor", "gate"] },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "ambiguous",
+      clarification: { reason: "place_ambiguous" },
+    });
+    expect(result.candidates?.map((candidate) => candidate.nodeId)).toEqual([
+      "Level1::north_gate_a",
+      "Level1::north_gate_b",
+    ]);
+  });
+
+  it("returns cross-floor aliases as ambiguous when no floor is supplied", () => {
+    const result = resolvePlaceFromCatalog(
+      input({
+        rawQuery: "北门",
+        placeHint: "北门",
+      }),
+      {
+        "Level1::north_gate": { tags: ["indoor", "gate"], aliases: ["北门"] },
+        "Level2::north_gate": { tags: ["indoor", "gate"], aliases: ["北门"] },
+      },
+    );
+
+    expect(result.status).toBe("ambiguous");
+    expect(result.candidates?.map((candidate) => candidate.graph)).toEqual(["Level1", "Level2"]);
+  });
+
+  it("returns not_found after direct and equivalent scoped searches find no candidates", () => {
+    const result = resolvePlaceFromCatalog(
+      input({
+        rawQuery: "L1 的游泳池",
+        submapHint: "L1",
+        placeHint: "游泳池",
+      }),
+      catalog,
+    );
+
+    expect(result).toMatchObject({
+      status: "not_found",
+      resolvedSubmap: { graphId: "Level1" },
+    });
+  });
+
   it("queries the parameter-specific compiled node catalog", async () => {
     const post = jest.fn(async () => ({
       data: {
@@ -142,6 +278,7 @@ describe("indoor-navigation-place-resolve", () => {
     );
 
     const result = await handler(input({
+      buildingName: "颐堤港",
       placeHint: "Starbucks",
       userParams: { haveStaffCard: false },
     }));

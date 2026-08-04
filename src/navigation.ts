@@ -1,6 +1,12 @@
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
+import {
+  BUILDING_NAME_INPUT_DESCRIPTION,
+  BuildingResolutionError,
+  resolveBackendBuildingName,
+} from "./building-resolution.js";
+
 const routePlanningPreferenceSchema = z.enum([
   "MinimizeTime",
   "MinimizeTransfers",
@@ -11,7 +17,7 @@ const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 export const navigationInputSchema = z.object({
   buildingName: z.string().trim().min(1).default("swfc").describe(
-    "Backend example-building identifier. Use 'swfc' for Shanghai World Financial Center.",
+    BUILDING_NAME_INPUT_DESCRIPTION,
   ),
   startNode: z.string().trim().min(1).describe(
     "Exact start node in '{submap}::{node}' format after location resolution.",
@@ -467,6 +473,21 @@ function errorResult(
   error: unknown,
   appliedUserParams?: Record<string, boolean | number | string>,
 ): NavigationToolResult {
+  if (error instanceof BuildingResolutionError) {
+    const payload: RouteErrorResponse = {
+      status: "error",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      recoveryHint: "Ask the user which supported building they mean before retrying.",
+    };
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      structuredContent: payload,
+    };
+  }
+
   if (axios.isAxiosError(error)) {
     const responseData = isRecord(error.response?.data) ? error.response.data : {};
     const httpStatus = error.response?.status;
@@ -531,8 +552,9 @@ export function createPlanRouteHandler(
     let appliedUserParams: Record<string, boolean | number | string> | undefined;
     try {
       const input = navigationInputSchema.parse(value);
+      const buildingName = resolveBackendBuildingName(input.buildingName);
       const banTags = [...new Set(input.traversalPreference.banTags)];
-      appliedUserParams = resolveUserParams(input);
+      appliedUserParams = resolveUserParams({ ...input, buildingName });
       const response = await httpClient.post(
         "/api/v1/quick-demo-navigation",
         {
@@ -544,7 +566,7 @@ export function createPlanRouteHandler(
         },
         {
           params: {
-            buildingName: input.buildingName,
+            buildingName,
             startNode: input.startNode,
             endNode: input.endNode,
           },

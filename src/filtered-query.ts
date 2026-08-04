@@ -1,13 +1,18 @@
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
+import {
+  BUILDING_NAME_INPUT_DESCRIPTION,
+  BuildingResolutionError,
+  resolveBackendBuildingName,
+} from "./building-resolution.js";
 import { deriveNodeIdFallback, topoNaviHttpClient } from "./navigation.js";
 
 const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 const filterValueListSchema = z.array(z.string().trim().min(1)).min(1).max(20);
 
 export const filteredQueryInputSchema = z.object({
-  buildingName: z.string().trim().min(1),
+  buildingName: z.string().trim().min(1).describe(BUILDING_NAME_INPUT_DESCRIPTION),
   rawQuery: z.string().trim().min(1).describe(
     "The user's original discovery question. Preserve it across interpretation retries.",
   ),
@@ -438,6 +443,20 @@ function renderResult(result: FilteredQueryOutput): string {
 }
 
 function errorResult(error: unknown): FilteredQueryToolResult {
+  if (error instanceof BuildingResolutionError) {
+    const payload: FilteredQueryOutput = {
+      status: "error",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+    };
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify(payload) }],
+      structuredContent: payload,
+    };
+  }
+
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
     const payload: FilteredQueryOutput = {
@@ -470,6 +489,7 @@ export function createFilteredQueryHandler(
   return async (value: FilteredQueryInput): Promise<FilteredQueryToolResult> => {
     try {
       const input = filteredQueryInputSchema.parse(value);
+      const buildingName = resolveBackendBuildingName(input.buildingName);
       const requested = requestFilters(input);
       const edgeMode = Boolean(requested.action_required);
       const entityType = edgeMode ? "edge" : "node";
@@ -492,7 +512,7 @@ export function createFilteredQueryHandler(
       const nodeRequest = httpClient.post(
         "/api/v1/quick-demo-all-available-nodes",
         body,
-        { params: { buildingName: input.buildingName, withNodesAttributes: "true" } },
+        { params: { buildingName, withNodesAttributes: "true" } },
       );
 
       if (!edgeMode) {
@@ -531,7 +551,7 @@ export function createFilteredQueryHandler(
       const edgeRequest = httpClient.post(
         "/api/v1/quick-demo-all-available-edges",
         body,
-        { params: { buildingName: input.buildingName } },
+        { params: { buildingName } },
       );
       const [nodeResponseRaw, edgeResponseRaw] = await Promise.all([nodeRequest, edgeRequest]);
       const nodeResponse = nodeCatalogResponseSchema.parse(nodeResponseRaw.data);
@@ -552,7 +572,7 @@ export function createFilteredQueryHandler(
           request = httpClient.post(
             "/api/v1/quick-demo-proximity-nodes",
             body,
-            { params: { buildingName: input.buildingName, nodeIdentifier, amount: 5 } },
+            { params: { buildingName, nodeIdentifier, amount: 5 } },
           ).then((response) => proximityResponseSchema.parse(response.data));
           proximityRequests.set(nodeIdentifier, request);
         }

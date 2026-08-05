@@ -4,6 +4,7 @@ import {
   createPlanRouteHandler,
   deriveNodeIdFallback,
   deriveRouteOverview,
+  navigationInputSchema,
   navigationOutputSchema,
 } from "./navigation.js";
 
@@ -215,7 +216,12 @@ describe("indoor-navigation-path-query handler", () => {
     }).success).toBe(false);
   });
 
-  it("posts traversal preferences and returns structured waypoints", async () => {
+  it("posts routing mode and traversal preferences and returns structured waypoints", async () => {
+    expect(navigationInputSchema.parse({
+      startNode: "LowerLobby::internal_start",
+      endNode: "LowerLobby::internal_goal",
+    }).isHighRise).toBe(true);
+
     const { client, post } = mockClientWith({ data: routeResponse });
     const handler = createPlanRouteHandler(client);
 
@@ -223,6 +229,7 @@ describe("indoor-navigation-path-query handler", () => {
       buildingName: "swfc",
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
+      isHighRise: false,
       userParams: { haveStaffCard: true },
       traversalPreference: {
         routePlanningPreference: "MinimizeTime",
@@ -250,6 +257,7 @@ describe("indoor-navigation-path-query handler", () => {
           buildingName: "swfc",
           startNode: "LowerLobby::internal_start",
           endNode: "LowerLobby::internal_goal",
+          isHighRise: false,
         },
       },
     );

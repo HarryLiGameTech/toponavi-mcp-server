@@ -25,6 +25,9 @@ export const navigationInputSchema = z.object({
   endNode: z.string().trim().min(1).describe(
     "Exact destination node in '{submap}::{node}' format after location resolution.",
   ),
+  isHighRise: z.boolean().default(false).describe(
+    "Use transport-first high-rise routing when true; use fully-informed low-rise routing when false.",
+  ),
   userParams: z.record(z.string(), userParamValueSchema).default({}).describe(
     "Compile-time access and capability parameters. SWFC access parameters default to conservative values.",
   ),
@@ -569,6 +572,7 @@ export function createPlanRouteHandler(
             buildingName,
             startNode: input.startNode,
             endNode: input.endNode,
+            isHighRise: input.isHighRise,
           },
         },
       );

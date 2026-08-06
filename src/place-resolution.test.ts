@@ -3,6 +3,7 @@ import type { AxiosInstance } from "axios";
 
 import {
   createResolvePlaceHandler,
+  placeResolutionInputSchema,
   resolvePlaceFromCatalog,
   type PlaceResolutionInput,
 } from "./place-resolution.js";
@@ -264,6 +265,20 @@ describe("indoor-navigation-place-resolve", () => {
       status: "not_found",
       resolvedSubmap: { graphId: "Level1" },
     });
+  });
+
+  it("treats empty optional hints as absent", () => {
+    const parsed = placeResolutionInputSchema.parse({
+      buildingName: "颐堤港",
+      rawQuery: "地铁站",
+      submapHint: "",
+      placeHint: "",
+      userParams: {},
+      maxCandidates: 8,
+    });
+
+    expect(parsed.submapHint).toBe("");
+    expect(parsed.placeHint).toBe("");
   });
 
   it("queries the parameter-specific compiled node catalog", async () => {

@@ -17,10 +17,10 @@ export const placeResolutionInputSchema = z.object({
   rawQuery: z.string().trim().min(1).describe(
     "The user's original destination phrase. Preserve it even when structured hints are supplied.",
   ),
-  submapHint: z.string().trim().min(1).optional().describe(
+  submapHint: z.string().trim().optional().describe(
     "The floor, level, or graph phrase extracted from the user's request, such as 'floor 3'. Do not invent an exact graph ID.",
   ),
-  placeHint: z.string().trim().min(1).optional().describe(
+  placeHint: z.string().trim().optional().describe(
     "The place or facility phrase extracted from the user's request, such as 'toilet' or 'Starbucks'. Do not invent an exact node ID.",
   ),
   userParams: z.record(z.string(), userParamValueSchema).default({}).describe(

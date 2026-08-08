@@ -220,7 +220,12 @@ describe("indoor-navigation-path-query handler", () => {
     expect(navigationInputSchema.parse({
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
-    }).isHighRise).toBe(true);
+    })).not.toHaveProperty("isHighRise");
+    expect(() => navigationInputSchema.parse({
+      startNode: "LowerLobby::internal_start",
+      endNode: "LowerLobby::internal_goal",
+      isHighRise: true,
+    })).toThrow();
 
     const { client, post } = mockClientWith({ data: routeResponse });
     const handler = createPlanRouteHandler(client);
@@ -229,7 +234,6 @@ describe("indoor-navigation-path-query handler", () => {
       buildingName: "swfc",
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
-      isHighRise: false,
       userParams: { haveStaffCard: true },
       traversalPreference: {
         routePlanningPreference: "MinimizeTime",

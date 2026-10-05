@@ -1,8 +1,10 @@
+import { buildingEndpoint, transportCatalogSchema, backendError } from "./backend-api.js";
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
 import {
   BUILDING_NAME_INPUT_DESCRIPTION,
+  type BuildingDefinition,
   BuildingResolutionError,
   resolveBackendBuildingName,
 } from "./building-resolution.js";
@@ -11,7 +13,7 @@ import { topoNaviHttpClient } from "./navigation.js";
 const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 export const elevatorQueryInputSchema = z.object({
-  buildingName: z.string().trim().min(1).default("swfc").describe(
+  buildingName: z.string().trim().min(1).describe(
     BUILDING_NAME_INPUT_DESCRIPTION,
   ),
   simple: z.boolean().default(true).describe(
@@ -30,26 +32,23 @@ export type ElevatorQueryInput = z.infer<typeof elevatorQueryInputSchema>;
 const simpleTransportSchema = z.object({
   transportId: z.string(),
   servedStops: z.array(z.string()),
+  params: z.record(z.string(), z.unknown()),
 });
 
 const completeStopSchema = z.object({
   label: z.string(),
   nodeId: z.string(),
-  location: z.number(),
+  location: z.number().optional(),
 });
 
 const completeTransportSchema = z.object({
   transportId: z.string(),
   displayName: z.string().nullable(),
   servedStops: z.array(completeStopSchema),
+  params: z.record(z.string(), z.unknown()),
 });
 
-const backendElevatorResponseSchema = z.object({
-  status: z.literal("success"),
-  message: z.string().optional(),
-  simple: z.boolean(),
-  transports: z.array(z.union([simpleTransportSchema, completeTransportSchema])),
-}).passthrough();
+const backendElevatorResponseSchema = transportCatalogSchema;
 
 export const elevatorQueryOutputSchema = z.object({
   status: z.enum(["success", "not_found", "error"]),
@@ -101,10 +100,13 @@ function errorResult(error: unknown): ElevatorQueryToolResult {
 
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
+    const responseData = backendError(error.response?.data);
+    const details = z.record(z.string(), z.unknown()).safeParse(responseData.details);
     const payload: ElevatorQueryOutput = {
       status: "error",
-      code: httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
-      message: error.message || "TopoNavi elevator query failed",
+      code: typeof responseData.code === "string" ? responseData.code : httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
+      ...(details.success ? { details: details.data } : {}),
+      message: typeof responseData.message === "string" ? responseData.message : error.message || "TopoNavi elevator query failed",
       ...(httpStatus ? { httpStatus } : {}),
     };
     return {
@@ -127,16 +129,17 @@ function errorResult(error: unknown): ElevatorQueryToolResult {
 }
 
 export function createElevatorQueryHandler(
+  buildings: readonly BuildingDefinition[],
   httpClient: Pick<AxiosInstance, "post"> = topoNaviHttpClient,
 ) {
   return async (value: ElevatorQueryInput): Promise<ElevatorQueryToolResult> => {
     try {
       const input = elevatorQueryInputSchema.parse(value);
-      const buildingName = resolveBackendBuildingName(input.buildingName);
+      const buildingName = resolveBackendBuildingName(input.buildingName, buildings);
       const response = await httpClient.post(
-        "/api/v1/quick-demo-elevators",
-        { userParams: input.userParams },
-        { params: { buildingName, simple: input.simple } },
+        buildingEndpoint(buildingName, "transports/query"),
+        { userParams: input.userParams, inDetail: !input.simple,
+          selection: { types: ["Elevator"], ...(input.transportId ? { transportIds: [input.transportId] } : {}) } },
       );
       const parsed = backendElevatorResponseSchema.parse(response.data);
       const transports = input.transportId

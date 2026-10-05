@@ -1,5 +1,6 @@
 import type { AxiosInstance } from "axios";
 import { describe, expect, it, jest } from "@jest/globals";
+import { createBuildingCatalog } from "./building-resolution.js";
 import {
   createPlanRouteHandler,
   deriveNodeIdFallback,
@@ -80,6 +81,8 @@ const routeResponse = {
   fromCache: true,
 };
 
+const buildings = createBuildingCatalog(["indigoBJ", "swfc", "nbc4", "trent"]);
+
 describe("indoor-navigation-path-query handler", () => {
   it("derives cautious user-facing hints from semantic node IDs", () => {
     expect(deriveNodeIdFallback("southwest_corner")).toEqual({
@@ -142,7 +145,7 @@ describe("indoor-navigation-path-query handler", () => {
       description: null,
     };
     const { client } = mockClientWith({ data: metadataResponse });
-    const result = await createPlanRouteHandler(client)({
+    const result = await createPlanRouteHandler(buildings, client)({
       buildingName: "上海环球金融中心",
       startNode: "LowerLobby::cashier_0715",
       endNode: "LowerLobby::internal_goal",
@@ -166,7 +169,7 @@ describe("indoor-navigation-path-query handler", () => {
       isIntermediate: true,
     });
     const { client } = mockClientWith({ data: semanticResponse });
-    const result = await createPlanRouteHandler(client)({
+    const result = await createPlanRouteHandler(buildings, client)({
       buildingName: "swfc",
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
@@ -218,17 +221,19 @@ describe("indoor-navigation-path-query handler", () => {
 
   it("posts routing mode and traversal preferences and returns structured waypoints", async () => {
     expect(navigationInputSchema.parse({
+      buildingName: "swfc",
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
     })).not.toHaveProperty("isHighRise");
     expect(() => navigationInputSchema.parse({
+      buildingName: "swfc",
       startNode: "LowerLobby::internal_start",
       endNode: "LowerLobby::internal_goal",
       isHighRise: true,
     })).toThrow();
 
     const { client, post } = mockClientWith({ data: routeResponse });
-    const handler = createPlanRouteHandler(client);
+    const handler = createPlanRouteHandler(buildings, client);
 
     const result = await handler({
       buildingName: "swfc",
@@ -242,8 +247,11 @@ describe("indoor-navigation-path-query handler", () => {
     });
 
     expect(post).toHaveBeenCalledWith(
-      "/api/v1/quick-demo-navigation",
+      "/api/v1/buildings/swfc/find-route",
       {
+        startNode: "LowerLobby::internal_start",
+        endNode: "LowerLobby::internal_goal",
+        routingMode: "fullyInformed",
         userParams: {
           haveStaffCard: true,
           haveManagementCard: false,
@@ -254,14 +262,6 @@ describe("indoor-navigation-path-query handler", () => {
         traversalPreference: {
           routePlanningPreference: "MinimizeTime",
           banTags: ["odor_prone"],
-        },
-      },
-      {
-        params: {
-          buildingName: "swfc",
-          startNode: "LowerLobby::internal_start",
-          endNode: "LowerLobby::internal_goal",
-          isHighRise: false,
         },
       },
     );
@@ -291,18 +291,20 @@ describe("indoor-navigation-path-query handler", () => {
         response: {
           status: 422,
           data: {
-            status: "error",
+            error: {
             code: "DESTINATION_HAS_BANNED_TAG",
             message: "Destination has banned tags",
             details: {
               nodeIdentifier: "LowerLobby::cafe",
               conflictingTags: ["staffed"],
             },
+            },
           },
         },
       };
     });
     const handler = createPlanRouteHandler(
+      buildings,
       { post } as unknown as Pick<AxiosInstance, "post">,
     );
 
@@ -337,6 +339,7 @@ describe("indoor-navigation-path-query handler", () => {
       };
     });
     const handler = createPlanRouteHandler(
+      buildings,
       { post } as unknown as Pick<AxiosInstance, "post">,
     );
 
@@ -357,7 +360,7 @@ describe("indoor-navigation-path-query handler", () => {
     });
   });
 
-  it("normalizes legacy no-route HTTP 500 responses as parameter business failures", async () => {
+  it("does not infer an access-parameter cause from legacy no-route responses", async () => {
     const post = jest.fn(async () => {
       throw {
         isAxiosError: true,
@@ -372,6 +375,7 @@ describe("indoor-navigation-path-query handler", () => {
       };
     });
     const handler = createPlanRouteHandler(
+      buildings,
       { post } as unknown as Pick<AxiosInstance, "post">,
     );
 
@@ -389,8 +393,8 @@ describe("indoor-navigation-path-query handler", () => {
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       status: "error",
-      code: "NO_ROUTE_FOR_USER_PARAMS",
-      message: "No route is available with the supplied access and capability parameters.",
+      code: "NO_ROUTE_FOUND",
+      message: "No route exists between these locations in the compiled topology.",
       httpStatus: 500,
       details: {
         userParams: {

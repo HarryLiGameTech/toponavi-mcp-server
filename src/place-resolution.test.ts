@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AxiosInstance } from "axios";
 
+import { createBuildingCatalog } from "./building-resolution.js";
 import {
   createResolvePlaceHandler,
   placeResolutionInputSchema,
@@ -54,6 +55,8 @@ function input(overrides: Partial<PlaceResolutionInput>): PlaceResolutionInput {
     ...overrides,
   };
 }
+
+const buildings = createBuildingCatalog(["indigoBJ", "swfc", "nbc4", "trent"]);
 
 describe("indoor-navigation-place-resolve", () => {
   it("resolves a unique shop through authoritative shop metadata", () => {
@@ -285,10 +288,12 @@ describe("indoor-navigation-place-resolve", () => {
     const post = jest.fn(async () => ({
       data: {
         status: "success",
-        allNodes: catalog,
+        inDetail: true,
+        nodes: Object.entries(catalog).map(([nodeId, attributes]) => ({ nodeId, attributes })),
       },
     }));
     const handler = createResolvePlaceHandler(
+      buildings,
       { post } as unknown as Pick<AxiosInstance, "post">,
     );
 
@@ -299,14 +304,8 @@ describe("indoor-navigation-place-resolve", () => {
     }));
 
     expect(post).toHaveBeenCalledWith(
-      "/api/v1/quick-demo-all-available-nodes",
-      { userParams: { haveStaffCard: false } },
-      {
-        params: {
-          buildingName: "indigoBJ",
-          withNodesAttributes: "true",
-        },
-      },
+      "/api/v1/buildings/indigoBJ/nodes/query",
+      { userParams: { haveStaffCard: false }, inDetail: true },
     );
     expect(result.isError).toBeUndefined();
     expect(result.structuredContent).toMatchObject({

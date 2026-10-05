@@ -1,8 +1,10 @@
+import { buildingEndpoint, nodeCatalogSchema, backendError } from "./backend-api.js";
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
 import {
   BUILDING_NAME_INPUT_DESCRIPTION,
+  type BuildingDefinition,
   BuildingResolutionError,
   resolveBackendBuildingName,
 } from "./building-resolution.js";
@@ -83,10 +85,7 @@ type RankedSubmap = z.infer<typeof submapCandidateSchema>;
 type PlaceCandidate = z.infer<typeof placeCandidateSchema>;
 type NodeAttributes = Record<string, unknown>;
 
-const catalogResponseSchema = z.object({
-  status: z.literal("success"),
-  allNodes: z.record(z.string(), z.record(z.string(), z.unknown())),
-}).passthrough();
+const catalogResponseSchema = nodeCatalogSchema;
 
 const NAME_FIELDS: Array<{ key: string; basis: string }> = [
   { key: "shopName", basis: "shop_name" },
@@ -515,10 +514,13 @@ function errorResult(error: unknown): PlaceResolutionToolResult {
 
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
+    const responseData = backendError(error.response?.data);
+    const details = z.record(z.string(), z.unknown()).safeParse(responseData.details);
     const payload: PlaceResolutionOutput = {
       status: "error",
-      code: httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
-      message: error.message || "TopoNavi place catalog request failed",
+      code: typeof responseData.code === "string" ? responseData.code : httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
+      ...(details.success ? { details: details.data } : {}),
+      message: typeof responseData.message === "string" ? responseData.message : error.message || "TopoNavi place catalog request failed",
       ...(httpStatus ? { httpStatus } : {}),
     };
     return {
@@ -541,21 +543,16 @@ function errorResult(error: unknown): PlaceResolutionToolResult {
 }
 
 export function createResolvePlaceHandler(
+  buildings: readonly BuildingDefinition[],
   httpClient: Pick<AxiosInstance, "post"> = topoNaviHttpClient,
 ) {
   return async (value: PlaceResolutionInput): Promise<PlaceResolutionToolResult> => {
     try {
       const input = placeResolutionInputSchema.parse(value);
-      const buildingName = resolveBackendBuildingName(input.buildingName);
+      const buildingName = resolveBackendBuildingName(input.buildingName, buildings);
       const response = await httpClient.post(
-        "/api/v1/quick-demo-all-available-nodes",
-        { userParams: input.userParams },
-        {
-          params: {
-            buildingName,
-            withNodesAttributes: "true",
-          },
-        },
+        buildingEndpoint(buildingName, "nodes/query"),
+        { userParams: input.userParams, inDetail: true },
       );
       const catalog = catalogResponseSchema.parse(response.data);
       const result = placeResolutionOutputSchema.parse(resolvePlaceFromCatalog(input, catalog.allNodes));

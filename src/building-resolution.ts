@@ -18,13 +18,11 @@ export type BuildingResolution = ResolvedBuilding | {
 };
 
 export const BUILDING_NAME_INPUT_DESCRIPTION = [
-  "A supported building ID, Chinese name, abbreviation, or natural phrase containing one.",
-  "Supported buildings: 北京颐堤港 (indigoBJ), 北京凤凰汇 (GalleriaBJ),",
-  "中国国际贸易中心 (CWTC), 上海环球金融中心 (SWFC),",
-  "宁波中心大厦 (NBC4), and 宁波诺丁汉大学行政楼 (trent).",
+  "An installed building ID, known Chinese name, abbreviation, or natural phrase containing one.",
+  "Available buildings are supplied by the configured TopoNavi backend.",
 ].join(" ");
 
-const BUILDINGS: readonly BuildingDefinition[] = [
+const KNOWN_BUILDINGS: readonly BuildingDefinition[] = [
   {
     buildingId: "indigoBJ",
     backendBuildingName: "indigoBJ",
@@ -70,6 +68,24 @@ const BUILDINGS: readonly BuildingDefinition[] = [
   },
 ] as const;
 
+export function createBuildingCatalog(names: readonly string[]): readonly BuildingDefinition[] {
+  const uniqueNames = new Set(names.map((name) => name.toLowerCase()));
+  if (uniqueNames.size !== names.length) throw new Error("Backend building names must be unique ignoring case.");
+
+  return names.map((name) => {
+    const known = KNOWN_BUILDINGS.find((building) => building.backendBuildingName.toLowerCase() === name.toLowerCase());
+    return known
+      ? { ...known, backendBuildingName: name }
+      : { buildingId: name, backendBuildingName: name, displayName: name, aliases: [name] };
+  });
+}
+
+export function describeBuildings(buildings: readonly BuildingDefinition[]): string {
+  const available = buildings.map((building) => `${building.displayName} (${building.backendBuildingName})`).join(", ");
+  return `${BUILDING_NAME_INPUT_DESCRIPTION} Installed map projects: ${available || "none"}. `
+    + "Compilation and routing depend on map validity and supplied user parameters.";
+}
+
 function normalize(value: string): string {
   return value
     .normalize("NFKC")
@@ -81,17 +97,19 @@ function isUsefulPartial(value: string): boolean {
   return /[\p{Script=Han}]/u.test(value) ? value.length >= 2 : value.length >= 3;
 }
 
-export function resolveBuildingName(value: string): BuildingResolution {
+export function resolveBuildingName(value: string, buildings: readonly BuildingDefinition[]): BuildingResolution {
   const query = value.trim();
   const normalizedQuery = normalize(query);
-  if (!normalizedQuery || !isUsefulPartial(normalizedQuery)) {
+  const exact = buildings.filter((building) => building.aliases.some((alias) => normalize(alias) === normalizedQuery));
+  if (!normalizedQuery || (!isUsefulPartial(normalizedQuery) && exact.length === 0)) {
     return { status: "not_found", query, candidates: [] };
   }
 
-  const matches = BUILDINGS.flatMap((building) => {
+  const matches = (exact.length > 0 ? exact : buildings).flatMap((building) => {
     const matchedAliases = building.aliases.filter((alias) => {
       const normalizedAlias = normalize(alias);
-      return normalizedQuery.includes(normalizedAlias)
+      return normalizedQuery === normalizedAlias
+        || (isUsefulPartial(normalizedAlias) && normalizedQuery.includes(normalizedAlias))
         || (isUsefulPartial(normalizedQuery) && normalizedAlias.includes(normalizedQuery));
     });
     return matchedAliases.length > 0 ? [{ building, matchedAliases }] : [];
@@ -134,8 +152,8 @@ export class BuildingResolutionError extends Error {
   }
 }
 
-export function resolveBackendBuildingName(value: string): string {
-  const resolution = resolveBuildingName(value);
+export function resolveBackendBuildingName(value: string, buildings: readonly BuildingDefinition[]): string {
+  const resolution = resolveBuildingName(value, buildings);
   if (resolution.status !== "resolved") throw new BuildingResolutionError(resolution);
   return resolution.backendBuildingName;
 }

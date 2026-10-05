@@ -1,8 +1,10 @@
+import { buildingEndpoint, nodeCatalogSchema, edgeCatalogSchema, neighborCatalogSchema, backendError } from "./backend-api.js";
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
 import {
   BUILDING_NAME_INPUT_DESCRIPTION,
+  type BuildingDefinition,
   BuildingResolutionError,
   resolveBackendBuildingName,
 } from "./building-resolution.js";
@@ -114,10 +116,7 @@ type NodeResult = z.infer<typeof nodeResultSchema>;
 type EdgeResult = z.infer<typeof edgeResultSchema>;
 type ProximityNode = z.infer<typeof proximityNodeSchema>;
 
-const nodeCatalogResponseSchema = z.object({
-  status: z.literal("success"),
-  allNodes: z.record(z.string(), z.record(z.string(), z.unknown())),
-}).passthrough();
+const nodeCatalogResponseSchema = nodeCatalogSchema;
 
 const rawEdgeSchema = z.object({
   graph: z.string(),
@@ -129,10 +128,7 @@ const rawEdgeSchema = z.object({
   attributes: z.record(z.string(), z.unknown()).default({}),
 });
 
-const edgeCatalogResponseSchema = z.object({
-  status: z.literal("success"),
-  edges: z.array(rawEdgeSchema),
-}).passthrough();
+const edgeCatalogResponseSchema = edgeCatalogSchema;
 
 const rawProximityNodeSchema = z.object({
   nodeIdentifier: z.string(),
@@ -144,10 +140,7 @@ const rawProximityNodeSchema = z.object({
   requiredActions: z.array(z.string()).default([]),
 });
 
-const proximityResponseSchema = z.object({
-  status: z.literal("success"),
-  proximityNodes: z.array(rawProximityNodeSchema),
-}).passthrough();
+const proximityResponseSchema = neighborCatalogSchema;
 
 const FIELD_ALIASES: Record<FilterField, Record<string, string[]>> = {
   tag: {
@@ -459,10 +452,13 @@ function errorResult(error: unknown): FilteredQueryToolResult {
 
   if (axios.isAxiosError(error)) {
     const httpStatus = error.response?.status;
+    const responseData = backendError(error.response?.data);
+    const details = z.record(z.string(), z.unknown()).safeParse(responseData.details);
     const payload: FilteredQueryOutput = {
       status: "error",
-      code: httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
-      message: error.message || "TopoNavi filtered query failed",
+      code: typeof responseData.code === "string" ? responseData.code : httpStatus ? `TOPONAVI_HTTP_${httpStatus}` : "TOPONAVI_BACKEND_UNAVAILABLE",
+      ...(details.success ? { details: details.data } : {}),
+      message: typeof responseData.message === "string" ? responseData.message : error.message || "TopoNavi filtered query failed",
       ...(httpStatus ? { httpStatus } : {}),
     };
     return {
@@ -483,13 +479,26 @@ function errorResult(error: unknown): FilteredQueryToolResult {
   };
 }
 
+function dataFilter(filters: FilterSet, edges: boolean): Record<string, unknown> {
+  const predicates = Object.entries(filters).map(([field, values]) => {
+    const paths = field === "tag" ? [edges ? "tags" : "attributes.tags"]
+      : field === "action_required" ? ["requiredActions"]
+      : ["attributes.shopCategory", "attributes.shop_category"];
+    return { or: paths.flatMap((path) => values!.flatMap((value) => field === "shop_category"
+      ? [{ field: path, op: "eq", value }, { field: path, op: "contains", value }]
+      : [{ field: path, op: "contains", value }])) };
+  });
+  return { and: predicates };
+}
+
 export function createFilteredQueryHandler(
+  buildings: readonly BuildingDefinition[],
   httpClient: Pick<AxiosInstance, "post"> = topoNaviHttpClient,
 ) {
   return async (value: FilteredQueryInput): Promise<FilteredQueryToolResult> => {
     try {
       const input = filteredQueryInputSchema.parse(value);
-      const buildingName = resolveBackendBuildingName(input.buildingName);
+      const buildingName = resolveBackendBuildingName(input.buildingName, buildings);
       const requested = requestFilters(input);
       const edgeMode = Boolean(requested.action_required);
       const entityType = edgeMode ? "edge" : "node";
@@ -508,11 +517,10 @@ export function createFilteredQueryHandler(
         };
       }
 
-      const body = { userParams: input.userParams };
+      const body = { userParams: input.userParams, inDetail: true };
       const nodeRequest = httpClient.post(
-        "/api/v1/quick-demo-all-available-nodes",
+        buildingEndpoint(buildingName, "nodes/query"),
         body,
-        { params: { buildingName, withNodesAttributes: "true" } },
       );
 
       if (!edgeMode) {
@@ -524,7 +532,10 @@ export function createFilteredQueryHandler(
           return { content: [{ type: "text", text: renderResult(result) }], structuredContent: result };
         }
 
-        const matches = nodeResults(nodeResponse.allNodes, interpreted.applied);
+        const filtered = await httpClient.post(buildingEndpoint(buildingName, "nodes/query"), {
+          ...body, filter: dataFilter(interpreted.applied, false),
+        });
+        const matches = nodeResults(nodeCatalogResponseSchema.parse(filtered.data).allNodes, {});
         const result: FilteredQueryOutput = matches.length === 0
           ? {
               status: "not_found",
@@ -549,9 +560,8 @@ export function createFilteredQueryHandler(
       }
 
       const edgeRequest = httpClient.post(
-        "/api/v1/quick-demo-all-available-edges",
+        buildingEndpoint(buildingName, "edges/query"),
         body,
-        { params: { buildingName } },
       );
       const [nodeResponseRaw, edgeResponseRaw] = await Promise.all([nodeRequest, edgeRequest]);
       const nodeResponse = nodeCatalogResponseSchema.parse(nodeResponseRaw.data);
@@ -563,16 +573,18 @@ export function createFilteredQueryHandler(
         return { content: [{ type: "text", text: renderResult(result) }], structuredContent: result };
       }
 
-      const matches = dedupeEdges(edgeResponse.edges, interpreted.applied);
+      const filtered = await httpClient.post(buildingEndpoint(buildingName, "edges/query"), {
+        ...body, filter: dataFilter(interpreted.applied, true),
+      });
+      const matches = dedupeEdges(edgeCatalogResponseSchema.parse(filtered.data).edges, {});
       const selected = matches.slice(0, input.limit);
       const proximityRequests = new Map<string, Promise<z.infer<typeof proximityResponseSchema>>>();
       const proximityFor = (nodeIdentifier: string) => {
         let request = proximityRequests.get(nodeIdentifier);
         if (!request) {
           request = httpClient.post(
-            "/api/v1/quick-demo-proximity-nodes",
-            body,
-            { params: { buildingName, nodeIdentifier, amount: 5 } },
+            buildingEndpoint(buildingName, "nodes/neighbors"),
+            { ...body, selection: { nodeId: nodeIdentifier }, limit: 5 },
           ).then((response) => proximityResponseSchema.parse(response.data));
           proximityRequests.set(nodeIdentifier, request);
         }

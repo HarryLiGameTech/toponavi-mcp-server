@@ -1,8 +1,10 @@
+import { buildingEndpoint, backendError } from "./backend-api.js";
 import axios, { type AxiosInstance } from "axios";
 import { z } from "zod/v4";
 
 import {
   BUILDING_NAME_INPUT_DESCRIPTION,
+  type BuildingDefinition,
   BuildingResolutionError,
   resolveBackendBuildingName,
 } from "./building-resolution.js";
@@ -16,7 +18,7 @@ const routePlanningPreferenceSchema = z.enum([
 const userParamValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 
 export const navigationInputSchema = z.object({
-  buildingName: z.string().trim().min(1).default("swfc").describe(
+  buildingName: z.string().trim().min(1).describe(
     BUILDING_NAME_INPUT_DESCRIPTION,
   ),
   startNode: z.string().trim().min(1).describe(
@@ -223,6 +225,7 @@ function apiTimeoutMs(): number {
 export const topoNaviHttpClient = axios.create({
   baseURL: apiBaseUrl(),
   timeout: apiTimeoutMs(),
+  headers: process.env.TOPONAVI_API_TOKEN ? { Authorization: `Bearer ${process.env.TOPONAVI_API_TOKEN}` } : {},
 });
 
 function resolveUserParams(input: NavigationInput): Record<string, boolean | number | string> {
@@ -462,6 +465,7 @@ function recoveryHintFor(code: string): string {
       return "No route remains in the topology compiled for the supplied access and capability parameters. Explain that the route is unavailable with the current settings, and ask before changing any card, key, or capability value.";
     case "NO_ROUTE_FOUND":
       return "No route exists between these locations in the compiled topology. Do not describe this as a temporary service failure.";
+    case "UNSUPPORTED_TRAVERSAL_PREFERENCE":
     case "TRAVERSAL_PREFERENCE_NOT_IMPLEMENTED":
       return "Do not retry with the unsupported preference fields.";
     default:
@@ -489,7 +493,7 @@ function errorResult(
   }
 
   if (axios.isAxiosError(error)) {
-    const responseData = isRecord(error.response?.data) ? error.response.data : {};
+    const responseData = backendError(error.response?.data);
     const httpStatus = error.response?.status;
     const legacyPlannerMessage = typeof responseData.error === "string"
       && (responseData.error.startsWith("No intra-map route found")
@@ -499,14 +503,14 @@ function errorResult(
     const code = typeof responseData.code === "string"
       ? responseData.code
       : legacyPlannerMessage
-        ? "NO_ROUTE_FOR_USER_PARAMS"
+        ? "NO_ROUTE_FOUND"
       : httpStatus
         ? `TOPONAVI_HTTP_${httpStatus}`
         : "TOPONAVI_BACKEND_UNAVAILABLE";
     const message = typeof responseData.message === "string"
       ? responseData.message
       : legacyPlannerMessage
-        ? "No route is available with the supplied access and capability parameters."
+        ? "No route exists between these locations in the compiled topology."
         : error.message || "TopoNavi backend request failed";
     const details: Record<string, unknown> = isRecord(responseData.details)
       ? { ...responseData.details }
@@ -546,30 +550,26 @@ function errorResult(
 }
 
 export function createPlanRouteHandler(
+  buildings: readonly BuildingDefinition[],
   httpClient: Pick<AxiosInstance, "post"> = topoNaviHttpClient,
 ) {
   return async (value: NavigationInput): Promise<NavigationToolResult> => {
     let appliedUserParams: Record<string, boolean | number | string> | undefined;
     try {
       const input = navigationInputSchema.parse(value);
-      const buildingName = resolveBackendBuildingName(input.buildingName);
+      const buildingName = resolveBackendBuildingName(input.buildingName, buildings);
       const banTags = [...new Set(input.traversalPreference.banTags)];
       appliedUserParams = resolveUserParams({ ...input, buildingName });
       const response = await httpClient.post(
-        "/api/v1/quick-demo-navigation",
+        buildingEndpoint(buildingName, "find-route"),
         {
+          startNode: input.startNode,
+          endNode: input.endNode,
+          routingMode: "fullyInformed",
           userParams: appliedUserParams,
           traversalPreference: {
             routePlanningPreference: input.traversalPreference.routePlanningPreference,
             banTags,
-          },
-        },
-        {
-          params: {
-            buildingName,
-            startNode: input.startNode,
-            endNode: input.endNode,
-            isHighRise: false,
           },
         },
       );

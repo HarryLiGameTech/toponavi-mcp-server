@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AxiosInstance } from "axios";
 
+import { createBuildingCatalog } from "./building-resolution.js";
 import {
   createElevatorQueryHandler,
   elevatorQueryOutputSchema,
@@ -16,26 +17,27 @@ function input(overrides: Partial<ElevatorQueryInput> = {}): ElevatorQueryInput 
   };
 }
 
+const buildings = createBuildingCatalog(["indigoBJ", "swfc", "nbc4", "trent"]);
+
 describe("indoor-navigation-elevator-query", () => {
   it("requests a personalized simple overview and carries the required user notice", async () => {
     const post = jest.fn(async () => ({
       data: {
         status: "success",
-        simple: true,
+        inDetail: false,
         transports: [
-          { transportId: "ElevNorth", servedStops: ["L3", "L2", "L1", "P1", "P2"] },
-          { transportId: "ElevSouth", servedStops: ["L3", "L2", "L1", "LG", "P1", "P2"] },
+          { transportId: "ElevNorth", type: "Elevator", displayName: null, params: { capacity: 12 }, stations: ["L3", "L2", "L1", "P1", "P2"].map(label => ({ label, nodeId: `${label}::lift` })) },
+          { transportId: "ElevSouth", type: "Elevator", displayName: null, params: {}, stations: ["L3", "L2", "L1", "LG", "P1", "P2"].map(label => ({ label, nodeId: `${label}::lift` })) },
         ],
       },
     }));
-    const handler = createElevatorQueryHandler({ post } as unknown as Pick<AxiosInstance, "post">);
+    const handler = createElevatorQueryHandler(buildings, { post } as unknown as Pick<AxiosInstance, "post">);
 
     const result = await handler(input({ userParams: { haveCard: true } }));
 
     expect(post).toHaveBeenCalledWith(
-      "/api/v1/quick-demo-elevators",
-      { userParams: { haveCard: true } },
-      { params: { buildingName: "indigoBJ", simple: true } },
+      "/api/v1/buildings/indigoBJ/transports/query",
+      { userParams: { haveCard: true }, inDetail: false, selection: { types: ["Elevator"] } },
     );
     expect(result.structuredContent).toMatchObject({
       status: "success",
@@ -49,22 +51,24 @@ describe("indoor-navigation-elevator-query", () => {
     const post = jest.fn(async () => ({
       data: {
         status: "success",
-        simple: false,
+        inDetail: true,
         transports: [
           {
             transportId: "ElevNorth",
             displayName: "North Elevator",
-            servedStops: [{ label: "L3", nodeId: "Level3::north_elevator_hall", location: 3 }],
+            type: "Elevator", params: {},
+            stations: [{ label: "L3", nodeId: "Level3::north_elevator_hall", location: 3 }],
           },
           {
             transportId: "Unlabelled",
             displayName: null,
-            servedStops: [{ label: "L1", nodeId: "Level1::lift", location: 1 }],
+            type: "Elevator", params: {},
+            stations: [{ label: "L1", nodeId: "Level1::lift", location: 1 }],
           },
         ],
       },
     }));
-    const handler = createElevatorQueryHandler({ post } as unknown as Pick<AxiosInstance, "post">);
+    const handler = createElevatorQueryHandler(buildings, { post } as unknown as Pick<AxiosInstance, "post">);
 
     const result = await handler(input({ simple: false, transportId: "Unlabelled" }));
 

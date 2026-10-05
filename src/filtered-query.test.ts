@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import type { AxiosInstance } from "axios";
 
+import { createBuildingCatalog } from "./building-resolution.js";
 import {
   createFilteredQueryHandler,
   type FilteredQueryInput,
@@ -84,16 +85,27 @@ function input(overrides: Partial<FilteredQueryInput>): FilteredQueryInput {
   };
 }
 
+// The HTTP fixture applies the small subset of predicates emitted by this client.
+function accepts(record: any, filter: any): boolean {
+  if (!filter) return true;
+  if (filter.and) return filter.and.every((child: any) => accepts(record, child));
+  if (filter.or) return filter.or.some((child: any) => accepts(record, child));
+  const value = filter.field.split(".").reduce((current: any, key: string) => current?.[key], record);
+  return filter.op === "eq" ? value === filter.value : Array.isArray(value) && value.includes(filter.value);
+}
+
 function mockHttpClient() {
-  const post = jest.fn(async (url: string, _body: unknown, config?: { params?: Record<string, unknown> }) => {
-    if (url.endsWith("quick-demo-all-available-nodes")) {
-      return { data: { status: "success", allNodes: nodes } };
+  const post = jest.fn(async (url: string, body: any) => {
+    if (url.endsWith("nodes/query")) {
+      const records = Object.entries(nodes).map(([nodeId, attributes]) => ({ nodeId, attributes }));
+      return { data: { status: "success", inDetail: true, nodes: records.filter(record => accepts(record, body.filter)) } };
     }
-    if (url.endsWith("quick-demo-all-available-edges")) {
-      return { data: { status: "success", edges } };
+    if (url.endsWith("edges/query")) {
+      const records = edges.map(edge => ({ ...edge, mapId: edge.graph, fromNodeId: `${edge.graph}::${edge.from}`, toNodeId: `${edge.graph}::${edge.to}`, cost: edge.costSeconds, attributes: {} }));
+      return { data: { status: "success", inDetail: true, edges: records.filter(record => accepts(record, body.filter)) } };
     }
-    if (url.endsWith("quick-demo-proximity-nodes")) {
-      const source = config?.params?.nodeIdentifier;
+    if (url.endsWith("nodes/neighbors")) {
+      const source = body.selection.nodeId;
       const proximityNodes = source === "Level3::bridge_a"
         ? [
             {
@@ -135,7 +147,10 @@ function mockHttpClient() {
               requiredActions: [],
             },
           ];
-      return { data: { status: "success", proximityNodes } };
+      return { data: { status: "success", inDetail: true, neighbors: proximityNodes.map(node => ({
+        nodeId: node.nodeIdentifier, localNodeId: node.nodeId, mapId: node.graph,
+        cost: node.costSeconds, nodeAttributes: node.attributes, tags: node.edgeTags, requiredActions: node.requiredActions,
+      })) } };
     }
     throw new Error(`Unexpected URL: ${url}`);
   });
@@ -145,10 +160,12 @@ function mockHttpClient() {
   };
 }
 
+const buildings = createBuildingCatalog(["indigoBJ", "swfc", "nbc4", "trent"]);
+
 describe("indoor-navigation-filtered-query", () => {
   it("ANDs fields and ORs fuzzy values inside shop_category", async () => {
-    const { client } = mockHttpClient();
-    const handler = createFilteredQueryHandler(client);
+    const { client, post } = mockHttpClient();
+    const handler = createFilteredQueryHandler(buildings, client);
 
     const result = await handler(input({
       rawQuery: "What coffee shops do we have?",
@@ -169,11 +186,18 @@ describe("indoor-navigation-filtered-query", () => {
     });
     expect((result.structuredContent?.nodes as Array<{ displayName: string }>).map((node) => node.displayName))
       .toEqual(["MANNER COFFEE", "STARBUCKS 星巴克"]);
+    expect(post).toHaveBeenLastCalledWith("/api/v1/buildings/indigoBJ/nodes/query", expect.objectContaining({
+      inDetail: true,
+      filter: { and: [
+        { or: [{ field: "attributes.tags", op: "contains", value: "shop" }] },
+        { or: expect.arrayContaining([{ field: "attributes.shop_category", op: "eq", value: "Full-service cafe" }]) },
+      ] },
+    }));
   });
 
   it("maps bathroom language to the compiled toilet tag", async () => {
     const { client } = mockHttpClient();
-    const handler = createFilteredQueryHandler(client);
+    const handler = createFilteredQueryHandler(buildings, client);
 
     const result = await handler(input({
       rawQuery: "Where is a bathroom?",
@@ -190,7 +214,7 @@ describe("indoor-navigation-filtered-query", () => {
 
   it("finds bridge crossings and adds direct neighbors ordered by cost", async () => {
     const { client, post } = mockHttpClient();
-    const handler = createFilteredQueryHandler(client);
+    const handler = createFilteredQueryHandler(buildings, client);
 
     const result = await handler(input({
       rawQuery: "Where can I take a photo when walking thru the bridge?",
@@ -212,13 +236,13 @@ describe("indoor-navigation-filtered-query", () => {
         ],
       }],
     });
-    expect(post.mock.calls.filter(([url]) => String(url).endsWith("quick-demo-proximity-nodes")))
+    expect(post.mock.calls.filter(([url]) => String(url).endsWith("nodes/neighbors")))
       .toHaveLength(2);
   });
 
   it("requires a second call for interpretations below 50 percent", async () => {
     const { client, post } = mockHttpClient();
-    const handler = createFilteredQueryHandler(client);
+    const handler = createFilteredQueryHandler(buildings, client);
 
     const first = await handler(input({
       rawQuery: "Where is the elevated scenic passage?",
@@ -233,7 +257,7 @@ describe("indoor-navigation-filtered-query", () => {
         input: "elevated scenic passage",
       }],
     });
-    expect(post.mock.calls.filter(([url]) => String(url).endsWith("quick-demo-proximity-nodes")))
+    expect(post.mock.calls.filter(([url]) => String(url).endsWith("nodes/neighbors")))
       .toHaveLength(0);
 
     const second = await handler(input({
@@ -250,7 +274,7 @@ describe("indoor-navigation-filtered-query", () => {
 
   it("rejects node-only and edge-only fields in one query", async () => {
     const { client, post } = mockHttpClient();
-    const handler = createFilteredQueryHandler(client);
+    const handler = createFilteredQueryHandler(buildings, client);
 
     const result = await handler(input({
       filters: {
